@@ -1,12 +1,14 @@
 """
 Xiaomi Air Purifier PM2.5 Logger
-Pulls PM2.5, temperature, humidity from two Xiaomi air purifiers
-and appends the data to Google Sheets.
+Pulls AQI/PM2.5, temperature, humidity from all air purifiers (2 regions)
+and appends data to Google Sheets.
 
-Requires env vars:
-  XIAOMI_EMAIL, XIAOMI_PASSWORD     — Mi Home account credentials
-  GCP_SA_KEY                        — Google Service Account JSON (string)
-  SHEET_ID                          — Google Sheets spreadsheet ID
+Env vars required:
+  XIAOMI_USER_ID       — Xiaomi userId
+  XIAOMI_SERVICE_TOKEN — Xiaomi serviceToken
+  XIAOMI_SSECURITY     — Xiaomi ssecurity
+  GCP_SA_KEY           — Google Service Account JSON string
+  SHEET_ID             — Google Sheets spreadsheet ID
 """
 
 import json
@@ -18,112 +20,84 @@ from datetime import datetime, timezone
 import gspread
 from micloud import MiCloud
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Device definitions — update model codes if needed
-# ---------------------------------------------------------------------------
+# ── Device definitions ──────────────────────────────────────────────────────
 DEVICES = [
-    {"name": "4 Pro", "model": "zhimi.airp.vb4"},
-    {"name": "4",     "model": "zhimi.airpurifier.mb5"},
+    {"name": "4 Lite",        "did": "873639853", "host": "sg.api.io.mi.com"},
+    {"name": "MAX/MAX Pro",   "did": "460764069", "host": "sg.api.io.mi.com"},
+    {"name": "MAX ชั้นล่าง",  "did": "131590393", "host": "api.io.mi.com"},
+    {"name": "แมว",           "did": "357231085", "host": "api.io.mi.com"},
 ]
 
-# Property keys as used by Xiaomi MIoT spec
-PROP_PM25   = "environment.air-quality-index"   # aqi / pm2.5
-PROP_TEMP   = "environment.temperature"
-PROP_HUMID  = "environment.relative-humidity"
-PROP_MODE   = "air-purifier.mode"
+# MIoT spec siid/piid for air purifiers
+PROPS = [
+    (2,  1,  "power"),
+    (3,  1,  "aqi"),
+    (3,  4,  "humidity"),
+    (3,  7,  "temperature"),
+]
 
 
-def get_micloud_client() -> MiCloud:
-    email    = os.environ["XIAOMI_EMAIL"]
-    password = os.environ["XIAOMI_PASSWORD"]
-    mc = MiCloud(email, password)
-    mc.login()
-    log.info("Logged in to Xiaomi Cloud")
+def get_micloud() -> MiCloud:
+    mc = MiCloud(None, None)
+    mc.user_id       = os.environ["XIAOMI_USER_ID"]
+    mc.service_token = os.environ["XIAOMI_SERVICE_TOKEN"]
+    mc.ssecurity     = os.environ["XIAOMI_SSECURITY"]
     return mc
 
 
-def fetch_device_status(mc: MiCloud, model: str) -> dict | None:
-    """Return raw property dict for the first device matching *model*."""
-    devices = mc.get_devices()
-    match = next((d for d in devices if d.get("model") == model), None)
-    if match is None:
-        log.warning("Device not found: %s", model)
-        return None
-
-    did   = match["did"]
-    token = match["token"]
-
-    # Use micloud's get_props (cloud path — no local IP needed)
-    props = mc.get_props(did, token, [PROP_PM25, PROP_TEMP, PROP_HUMID, PROP_MODE])
-    return props
-
-
-def extract_value(props: dict, key: str):
-    """Pull a scalar value from the MiCloud property response."""
-    for item in props.get("result", []):
-        if item.get("siid") and item.get("piid"):
-            # numeric siid/piid path — handled below
-            pass
-        if item.get("prop") == key or item.get("key") == key:
-            return item.get("value")
-    # Fallback: search by partial key match
-    for item in props.get("result", []):
-        if key.split(".")[-1] in str(item):
-            return item.get("value")
-    return None
+def fetch_props(mc: MiCloud, did: str, host: str) -> dict:
+    url          = f"https://{host}/app/miotspec/prop/get"
+    params_list  = [{"did": did, "siid": s, "piid": p} for s, p, _ in PROPS]
+    raw          = mc.request(url, {"data": json.dumps({"params": params_list}, separators=(",", ":"))})
+    result       = json.loads(raw)
+    row = {label: None for _, _, label in PROPS}
+    for item in result.get("result", []):
+        if item.get("code") == 0:
+            for s, p, label in PROPS:
+                if s == item["siid"] and p == item["piid"]:
+                    row[label] = item["value"]
+    return row
 
 
 def build_row(name: str, props: dict) -> list:
-    ts      = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    pm25    = extract_value(props, PROP_PM25)
-    temp    = extract_value(props, PROP_TEMP)
-    humidity = extract_value(props, PROP_HUMID)
-    mode    = extract_value(props, PROP_MODE)
-    return [ts, name, pm25, temp, humidity, mode]
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return [ts, name, props.get("aqi"), props.get("temperature"), props.get("humidity"), props.get("power")]
 
 
 def append_to_sheet(rows: list[list]):
-    sa_key = json.loads(os.environ["GCP_SA_KEY"])
+    sa_key   = json.loads(os.environ["GCP_SA_KEY"])
     sheet_id = os.environ["SHEET_ID"]
+    gc       = gspread.service_account_from_dict(sa_key)
+    ws       = gc.open_by_key(sheet_id).sheet1
 
-    gc = gspread.service_account_from_dict(sa_key)
-    sh = gc.open_by_key(sheet_id)
-    ws = sh.sheet1
-
-    # Add header row if sheet is empty
-    if ws.row_count == 0 or not ws.row_values(1):
-        ws.append_row(
-            ["timestamp", "device", "pm25", "temperature", "humidity", "mode"],
-            value_input_option="USER_ENTERED",
-        )
+    if not ws.row_values(1):
+        ws.append_row(["timestamp", "device", "aqi_pm25", "temperature", "humidity", "power"],
+                      value_input_option="USER_ENTERED")
 
     for row in rows:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        log.info("Appended row: %s", row)
+        log.info("Appended: %s", row)
 
 
 def main():
-    mc = get_micloud_client()
-
+    mc   = get_micloud()
     rows = []
+
     for device in DEVICES:
-        log.info("Fetching %s (%s)…", device["name"], device["model"])
-        props = fetch_device_status(mc, device["model"])
-        if props is None:
-            log.error("Skipping %s — device not found in cloud", device["name"])
-            continue
-        row = build_row(device["name"], props)
-        log.info("Row: %s", row)
-        rows.append(row)
+        log.info("Fetching %s (did=%s)...", device["name"], device["did"])
+        try:
+            props = fetch_props(mc, device["did"], device["host"])
+            row   = build_row(device["name"], props)
+            log.info("Row: %s", row)
+            rows.append(row)
+        except Exception as e:
+            log.error("Failed %s: %s", device["name"], e)
 
     if not rows:
-        log.error("No data collected — aborting without writing to sheet")
+        log.error("No data — aborting")
         sys.exit(1)
 
     append_to_sheet(rows)

@@ -2,29 +2,24 @@ name: Log PM2.5
 
 on:
   schedule:
-    - cron: '0 * * * *'   # every hour on the hour (UTC)
-  workflow_dispatch:        # allow manual trigger from Actions tab
+    - cron: '0 * * * *'   # every hour (UTC)
+  workflow_dispatch:
 
 jobs:
   log:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run PM2.5 logger
-        run: python log_pm25.py
+      - run: pip install -r requirements.txt
+      - run: python log_pm25.py
         env:
-          XIAOMI_EMAIL:    ${{ secrets.XIAOMI_EMAIL }}
-          XIAOMI_PASSWORD: ${{ secrets.XIAOMI_PASSWORD }}
-          GCP_SA_KEY:      ${{ secrets.GCP_SA_KEY }}
-          SHEET_ID:        ${{ secrets.SHEET_ID }}
+          XIAOMI_USER_ID:       ${{ secrets.XIAOMI_USER_ID }}
+          XIAOMI_SERVICE_TOKEN: ${{ secrets.XIAOMI_SERVICE_TOKEN }}
+          XIAOMI_SSECURITY:     ${{ secrets.XIAOMI_SSECURITY }}
+          GCP_SA_KEY:           ${{ secrets.GCP_SA_KEY }}
+          SHEET_ID:             ${{ secrets.SHEET_ID }}
