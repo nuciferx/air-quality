@@ -1,0 +1,2 @@
+micloud>=0.5.0
+gspread>=6.0.0
