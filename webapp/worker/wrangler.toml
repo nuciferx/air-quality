@@ -1,0 +1,11 @@
+name = "air-quality-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Secrets are NOT stored here — set them via:
+#   wrangler secret put XIAOMI_USER_ID
+#   wrangler secret put XIAOMI_SERVICE_TOKEN
+#   wrangler secret put XIAOMI_SSECURITY
+#
+# [vars] is for non-sensitive config only.
+[vars]
