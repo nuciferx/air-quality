@@ -1,0 +1,35 @@
+name: Auto-Renew Xiaomi Token
+
+on:
+  schedule:
+    # Run every 25 days at 02:00 UTC
+    - cron: "0 2 */25 * *"
+  workflow_dispatch:
+
+jobs:
+  renew-token:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run auto-renew script (passToken — no 2FA)
+        env:
+          XIAOMI_PASS_TOKEN: ${{ secrets.XIAOMI_PASS_TOKEN }}
+          XIAOMI_USER_ID: ${{ secrets.XIAOMI_USER_ID }}
+          XIAOMI_EMAIL: ${{ secrets.XIAOMI_EMAIL }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python auto-renew/renew_token_passtoken.py
