@@ -735,11 +735,40 @@ export default {
         const results = await Promise.allSettled(
           DEVICES.map((d) => fetchOneDevice(d, creds))
         );
-        const devices = results.map((r, i) => {
+
+        // For offline devices, fall back to most recent D1 reading (≤ 2 hours old)
+        const staleCutoff = Math.floor(Date.now() / 1000) - 7200;
+        const devices = await Promise.all(results.map(async (r, i) => {
           if (r.status === "fulfilled") return r.value;
           console.error(`Failed to fetch ${DEVICES[i].id}: ${r.reason}`);
+
+          // Try last known value from D1
+          try {
+            const row = await env.DB.prepare(
+              `SELECT * FROM readings WHERE device_id = ? AND ts > ? ORDER BY ts DESC LIMIT 1`
+            ).bind(DEVICES[i].id, staleCutoff).first();
+            if (row) {
+              return {
+                id: DEVICES[i].id,
+                name: DEVICES[i].name,
+                did: DEVICES[i].did,
+                host: DEVICES[i].host,
+                online: false,
+                stale: true,
+                fetched_at: row.ts as number,
+                values: {
+                  pm25:   row.pm25   ?? undefined,
+                  temp:   row.temperature ?? undefined,
+                  hum:    row.humidity   ?? undefined,
+                  power:  row.power != null ? Boolean(row.power) : undefined,
+                },
+              };
+            }
+          } catch { /* ignore D1 errors */ }
+
           return deviceSkeleton(DEVICES[i], false);
-        });
+        }));
+
         return jsonResponse({ devices }, 200, origin);
       } catch (err) {
         return errorResponse(String(err), 502, origin);
