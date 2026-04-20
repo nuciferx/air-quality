@@ -63,10 +63,9 @@ const DEVICES: DeviceConfig[] = [
     host: "cn",
     props: {
       power:  { siid: 2, piid: 1  },  // bool
-      mode:   { siid: 2, piid: 2  },  // 0=Auto 1=Sleep 2=Favorite 3=L1 4=L2 5=L3
-      pm25:   { siid: 3, piid: 2  },  // µg/m³
+      mode:   { siid: 2, piid: 2  },  // 0=Auto 1=Sleep 2=Favorite
+      pm25:   { siid: 3, piid: 1  },  // AQI/PM2.5 (older models: aqi at piid:1)
       temp:   { siid: 3, piid: 3  },  // °C
-      hum:    { siid: 3, piid: 1  },  // %RH
       filter: { siid: 4, piid: 1  },  // % remaining
       buzz:   { siid: 7, piid: 1  },  // bool
       lock:   { siid: 8, piid: 1  },  // bool
@@ -81,9 +80,8 @@ const DEVICES: DeviceConfig[] = [
     props: {
       power:  { siid: 2, piid: 1  },
       mode:   { siid: 2, piid: 2  },
-      pm25:   { siid: 3, piid: 2  },
-      temp:   { siid: 3, piid: 3  },
-      hum:    { siid: 3, piid: 1  },  // %RH
+      pm25:   { siid: 3, piid: 1  },  // AQI/PM2.5
+      temp:   { siid: 3, piid: 3  },  // °C
       filter: { siid: 4, piid: 1  },
       buzz:   { siid: 7, piid: 1  },
       lock:   { siid: 8, piid: 1  },
@@ -98,9 +96,8 @@ const DEVICES: DeviceConfig[] = [
     props: {
       power:  { siid: 2, piid: 1  },
       mode:   { siid: 2, piid: 2  },
-      pm25:   { siid: 3, piid: 2  },
-      temp:   { siid: 3, piid: 3  },
-      hum:    { siid: 3, piid: 1  },  // %RH
+      pm25:   { siid: 3, piid: 1  },  // AQI/PM2.5
+      temp:   { siid: 3, piid: 3  },  // °C
       filter: { siid: 4, piid: 1  },
       buzz:   { siid: 6, piid: 1  },
       lock:   { siid: 5, piid: 1  },
@@ -881,6 +878,53 @@ export default {
       } catch (err) {
         return errorResponse(`Credentials verification failed: ${String(err)}`, 422, origin);
       }
+    }
+
+    // POST /api/log — Accept readings from external sources (Python scripts) and write to D1
+    if (request.method === "POST" && path === "/api/log") {
+      const authHeader = request.headers.get("Authorization");
+      const secret = url.searchParams.get("secret");
+      if (secret !== env.LOG_SECRET && authHeader !== `Bearer ${env.LOG_SECRET}`) {
+        return errorResponse("Unauthorized", 401, origin);
+      }
+
+      let body: { readings?: Array<{
+        device_id: string; device_name: string;
+        pm25?: number | null; pm10?: number | null; aqi?: number | null;
+        temperature?: number | null; humidity?: number | null; power?: boolean | null;
+      }> };
+      try {
+        body = await request.json();
+      } catch {
+        return errorResponse("Invalid JSON body", 400, origin);
+      }
+
+      if (!body.readings || !Array.isArray(body.readings)) {
+        return errorResponse("Missing required field: readings (array)", 400, origin);
+      }
+
+      const ts = Math.floor(Date.now() / 1000);
+      const stmt = env.DB.prepare(
+        `INSERT INTO readings (ts, device_id, device_name, pm25, pm10, aqi, temperature, humidity, power)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
+
+      const inserts = body.readings.map((r) =>
+        stmt.bind(
+          ts,
+          r.device_id,
+          r.device_name,
+          r.pm25    ?? null,
+          r.pm10    ?? null,
+          r.aqi     ?? null,
+          r.temperature ?? null,
+          r.humidity    ?? null,
+          r.power != null ? (r.power ? 1 : 0) : null,
+        )
+      );
+
+      if (inserts.length > 0) await env.DB.batch(inserts);
+      return jsonResponse({ ok: true, count: inserts.length, ts }, 200, origin);
     }
 
     // GET /api/creds — Show credential status (when last updated, source)
