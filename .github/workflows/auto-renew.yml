@@ -25,10 +25,8 @@ jobs:
       - name: Run auto-renew script (passToken — no 2FA)
         env:
           XIAOMI_PASS_TOKEN: ${{ secrets.XIAOMI_PASS_TOKEN }}
-          XIAOMI_USER_ID: ${{ secrets.XIAOMI_USER_ID }}
-          XIAOMI_EMAIL: ${{ secrets.XIAOMI_EMAIL }}
-          WORKER_URL: ${{ secrets.WORKER_URL }}
-          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+          WORKER_URL: https://air-quality-api.ideaplanstudio.workers.dev
+          WORKER_SECRET: ${{ secrets.LOG_SECRET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |

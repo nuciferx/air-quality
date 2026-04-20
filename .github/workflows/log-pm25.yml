@@ -16,10 +16,11 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       - run: pip install -r requirements.txt
+      - run: pip install micloud requests
       - run: python log_pm25.py
         env:
           XIAOMI_USER_ID:       ${{ secrets.XIAOMI_USER_ID }}
           XIAOMI_SERVICE_TOKEN: ${{ secrets.XIAOMI_SERVICE_TOKEN }}
           XIAOMI_SSECURITY:     ${{ secrets.XIAOMI_SSECURITY }}
-          GCP_SA_KEY:           ${{ secrets.GCP_SA_KEY }}
-          SHEET_ID:             ${{ secrets.SHEET_ID }}
+          WORKER_URL:           https://air-quality-api.ideaplanstudio.workers.dev
+          WORKER_SECRET:        ${{ secrets.LOG_SECRET }}
