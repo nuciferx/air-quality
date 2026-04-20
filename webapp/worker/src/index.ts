@@ -63,9 +63,10 @@ const DEVICES: DeviceConfig[] = [
     host: "cn",
     props: {
       power:  { siid: 2, piid: 1  },  // bool
-      mode:   { siid: 2, piid: 2  },  // 0=Auto 1=Sleep 2=Favorite
-      pm25:   { siid: 3, piid: 1  },  // AQI/PM2.5 (older models: aqi at piid:1)
+      mode:   { siid: 2, piid: 2  },  // 0=Auto 1=Sleep 2=Favorite 3=L1 4=L2 5=L3
+      pm25:   { siid: 3, piid: 2  },  // µg/m³
       temp:   { siid: 3, piid: 3  },  // °C
+      hum:    { siid: 3, piid: 1  },  // %RH
       filter: { siid: 4, piid: 1  },  // % remaining
       buzz:   { siid: 7, piid: 1  },  // bool
       lock:   { siid: 8, piid: 1  },  // bool
@@ -80,8 +81,9 @@ const DEVICES: DeviceConfig[] = [
     props: {
       power:  { siid: 2, piid: 1  },
       mode:   { siid: 2, piid: 2  },
-      pm25:   { siid: 3, piid: 1  },  // AQI/PM2.5
-      temp:   { siid: 3, piid: 3  },  // °C
+      pm25:   { siid: 3, piid: 2  },
+      temp:   { siid: 3, piid: 3  },
+      hum:    { siid: 3, piid: 1  },  // %RH
       filter: { siid: 4, piid: 1  },
       buzz:   { siid: 7, piid: 1  },
       lock:   { siid: 8, piid: 1  },
@@ -96,8 +98,9 @@ const DEVICES: DeviceConfig[] = [
     props: {
       power:  { siid: 2, piid: 1  },
       mode:   { siid: 2, piid: 2  },
-      pm25:   { siid: 3, piid: 1  },  // AQI/PM2.5
-      temp:   { siid: 3, piid: 3  },  // °C
+      pm25:   { siid: 3, piid: 2  },
+      temp:   { siid: 3, piid: 3  },
+      hum:    { siid: 3, piid: 1  },  // %RH
       filter: { siid: 4, piid: 1  },
       buzz:   { siid: 6, piid: 1  },
       lock:   { siid: 5, piid: 1  },
