@@ -1,0 +1,17 @@
+name = "air-quality-bot"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+QWEN_MODEL = "qwen-turbo"
+WORKER_API_URL = "https://air-quality-api.ideaplanstudio.workers.dev"
+
+# Service binding — direct worker-to-worker (bypasses zone restriction)
+[[services]]
+binding = "AIR_QUALITY_API"
+service = "air-quality-api"
+
+[[kv_namespaces]]
+binding = "BOT_KV"
+id = "a90e28f34e0343aea38d28ebcd8f18d5"

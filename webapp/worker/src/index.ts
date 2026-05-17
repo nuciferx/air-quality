@@ -20,6 +20,9 @@ export interface Env {
   CREDS_KV: KVNamespace;
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
+  WEATHER_LAT?: string;
+  WEATHER_LON?: string;
+  WEATHER_LABEL?: string;
 }
 
 // ── Device catalogue ──────────────────────────────────────────────────────────
@@ -416,6 +419,8 @@ function deviceSkeleton(device: DeviceConfig, online = false) {
     online,
     values: {} as Record<string, unknown>,
     fetched_at: Date.now() / 1000,
+    source: online ? "xiaomi" : "d1",
+    health: online ? "online" : "api_error",
   };
 }
 
@@ -429,6 +434,8 @@ async function fetchOneDevice(device: DeviceConfig, creds: XiaomiCreds) {
     online: true,
     values,
     fetched_at: Date.now() / 1000,
+    source: "xiaomi" as const,
+    health: "online" as const,
   };
 }
 
@@ -467,8 +474,56 @@ function errorResponse(message: string, status: number, origin: string | null = 
 
 // ── Auto-control thresholds ───────────────────────────────────────────────────
 
-const PM25_DANGER = 35;  // µg/m³ — เกินนี้ → เปิดแรงสุดทุกเครื่อง
-const PM25_SAFE   = 15;  // µg/m³ — ต่ำกว่านี้ → กลับ Auto mode
+const DEFAULT_PM25_DANGER = 40;   // µg/m³ — เกินนี้ → เปิดเครื่องเฉพาะห้องนั้น
+const DEFAULT_PM25_SAFE   = 10;   // µg/m³ — ต่ำกว่านี้ → กลับ Auto mode
+const ESCALATION_AFTER_SECONDS = 30 * 60;
+const DEADMAN_ALERT_AFTER_SECONDS = 15 * 60;
+const TOKEN_ALERT_TTL_SECONDS = 6 * 60 * 60;
+const REPORT_TIMEZONE = "Asia/Bangkok";
+const REPORT_HOURS = new Set([0, 8, 12, 17]);
+const REPORT_MINUTE = 0;
+const DEFAULT_WEATHER_LAT = "13.7563";
+const DEFAULT_WEATHER_LON = "100.5018";
+const DEFAULT_WEATHER_LABEL = "Bangkok";
+
+const ROOM_THRESHOLDS: Record<string, { danger: number; safe: number }> = {
+  "4lite":   { danger: DEFAULT_PM25_DANGER, safe: DEFAULT_PM25_SAFE },
+  maxpro:    { danger: DEFAULT_PM25_DANGER, safe: DEFAULT_PM25_SAFE },
+  maxdown:   { danger: DEFAULT_PM25_DANGER, safe: DEFAULT_PM25_SAFE },
+  cat:       { danger: DEFAULT_PM25_DANGER, safe: DEFAULT_PM25_SAFE },
+};
+
+interface AutoRoomState {
+  active: boolean;
+  triggeredAt?: number;
+  lastEscalatedAt?: number;
+}
+
+interface DeviceRuntime {
+  id: string;
+  name: string;
+  did: string;
+  host: "sg" | "cn";
+  online: boolean;
+  values: Record<string, unknown>;
+  fetched_at: number;
+  stale?: boolean;
+  source?: "xiaomi" | "d1";
+  health?: "online" | "stale" | "token_expired" | "api_error";
+  error?: string;
+}
+
+interface WeatherSnapshot {
+  label: string;
+  currentTemp?: number;
+  currentHumidity?: number;
+  currentWind?: number;
+  currentCode?: number;
+  todayMax?: number;
+  todayMin?: number;
+  todayCode?: number;
+  todayPrecipProbability?: number;
+}
 
 // ── Telegram helper ───────────────────────────────────────────────────────────
 
@@ -489,87 +544,305 @@ async function sendTelegram(env: Env, message: string): Promise<void> {
   }
 }
 
-// ── Auto-control: set power + mode for all devices ───────────────────────────
+function weatherCodeLabel(code?: number): string {
+  switch (code) {
+    case 0: return "ท้องฟ้าแจ่มใส";
+    case 1:
+    case 2:
+    case 3: return "มีเมฆบางส่วน";
+    case 45:
+    case 48: return "มีหมอก";
+    case 51:
+    case 53:
+    case 55: return "ฝนปรอย";
+    case 61:
+    case 63:
+    case 65: return "ฝน";
+    case 71:
+    case 73:
+    case 75: return "หิมะ";
+    case 80:
+    case 81:
+    case 82: return "ฝนเป็นช่วง ๆ";
+    case 95: return "พายุฝนฟ้าคะนอง";
+    default: return "สภาพอากาศทั่วไป";
+  }
+}
 
-async function setAllDevices(
-  creds: XiaomiCreds,
+function formatBangkokDate(nowTs: number): string {
+  return new Intl.DateTimeFormat("th-TH", {
+    timeZone: REPORT_TIMEZONE,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(nowTs * 1000));
+}
+
+function reportSlotKey(nowTs: number): string {
+  const parts = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: REPORT_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(nowTs * 1000));
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}`;
+}
+
+function shouldSendScheduledReport(nowTs: number): { send: boolean; includeWeather: boolean; slotKey: string } {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: REPORT_TIMEZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(nowTs * 1000));
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const hour = Number(map.hour);
+  const minute = Number(map.minute);
+  const send = REPORT_HOURS.has(hour) && minute === REPORT_MINUTE;
+  return { send, includeWeather: hour === 8, slotKey: reportSlotKey(nowTs) };
+}
+
+function buildIndoorSummary(devices: DeviceRuntime[]): string {
+  const ordered = DEVICES
+    .map((device) => devices.find((runtime) => runtime.id === device.id))
+    .filter((device): device is DeviceRuntime => Boolean(device));
+
+  return ordered.map((device) => {
+    const pm25 = device.values.pm25;
+    const temp = device.values.temp;
+    const hum = device.values.hum;
+    const health = device.online ? "online" : (device.health ?? "offline");
+    return `- ${device.name}: PM2.5 ${pm25 ?? "—"} µg/m³ | Temp ${temp ?? "—"}°C | Hum ${hum ?? "—"}% | ${health}`;
+  }).join("\n");
+}
+
+async function fetchWeatherSnapshot(env: Env): Promise<WeatherSnapshot | null> {
+  const lat = env.WEATHER_LAT ?? DEFAULT_WEATHER_LAT;
+  const lon = env.WEATHER_LON ?? DEFAULT_WEATHER_LON;
+  const label = env.WEATHER_LABEL ?? DEFAULT_WEATHER_LABEL;
+  const url = new URL("https://api.open-meteo.com/v1/forecast");
+  url.searchParams.set("latitude", lat);
+  url.searchParams.set("longitude", lon);
+  url.searchParams.set("timezone", REPORT_TIMEZONE);
+  url.searchParams.set("current", "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m");
+  url.searchParams.set("daily", "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max");
+  url.searchParams.set("forecast_days", "1");
+
+  try {
+    const response = await fetch(url.toString());
+    if (!response.ok) return null;
+    const data = await response.json() as {
+      current?: {
+        temperature_2m?: number;
+        relative_humidity_2m?: number;
+        weather_code?: number;
+        wind_speed_10m?: number;
+      };
+      daily?: {
+        weather_code?: number[];
+        temperature_2m_max?: number[];
+        temperature_2m_min?: number[];
+        precipitation_probability_max?: number[];
+      };
+    };
+    return {
+      label,
+      currentTemp: data.current?.temperature_2m,
+      currentHumidity: data.current?.relative_humidity_2m,
+      currentWind: data.current?.wind_speed_10m,
+      currentCode: data.current?.weather_code,
+      todayMax: data.daily?.temperature_2m_max?.[0],
+      todayMin: data.daily?.temperature_2m_min?.[0],
+      todayCode: data.daily?.weather_code?.[0],
+      todayPrecipProbability: data.daily?.precipitation_probability_max?.[0],
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function maybeSendScheduledReport(env: Env, devices: DeviceRuntime[], nowTs: number): Promise<void> {
+  const { send, includeWeather, slotKey } = shouldSendScheduledReport(nowTs);
+  if (!send) return;
+
+  const lastSlot = await env.CREDS_KV.get("system:last_report_slot").catch(() => null);
+  if (lastSlot === slotKey) return;
+
+  let message =
+    `📊 <b>รายงานอากาศในบ้าน</b>\n` +
+    `🕐 ${formatBangkokDate(nowTs)}\n\n` +
+    `${buildIndoorSummary(devices)}`;
+
+  const credStatus = await getCredStatus(env, nowTs);
+  message +=
+    `\n\n🔑 <b>สถานะโทเคน</b>\n` +
+    `source: ${credStatus.source} | working: ${credStatus.workingSource}\n` +
+    `อัปเดตล่าสุด: ${credStatus.updatedAt ? formatBangkokDate(credStatus.updatedAt) : "ไม่ทราบ"}\n` +
+    `ผ่านมาแล้ว: ${credStatus.ageDays ?? "—"} วัน | คาดว่าเหลือ: ${credStatus.estimatedDaysLeft ?? "—"} วัน`;
+
+  if (includeWeather) {
+    const weather = await fetchWeatherSnapshot(env);
+    if (weather) {
+      message +=
+        `\n\n🌤 <b>สภาพอากาศทั่วไป (${weather.label})</b>\n` +
+        `ตอนนี้: ${weather.currentTemp ?? "—"}°C | RH ${weather.currentHumidity ?? "—"}% | ลม ${weather.currentWind ?? "—"} km/h | ${weatherCodeLabel(weather.currentCode)}\n` +
+        `พยากรณ์วันนี้: สูงสุด ${weather.todayMax ?? "—"}°C | ต่ำสุด ${weather.todayMin ?? "—"}°C | ฝน ${weather.todayPrecipProbability ?? "—"}% | ${weatherCodeLabel(weather.todayCode)}`;
+    } else {
+      message += `\n\n🌤 <b>สภาพอากาศทั่วไป</b>\nไม่สามารถดึงข้อมูลพยากรณ์ได้ในรอบนี้`;
+    }
+  }
+
+  await sendTelegram(env, message);
+  await env.CREDS_KV.put("system:last_report_slot", slotKey);
+}
+
+function roomThresholds(deviceId: string) {
+  return ROOM_THRESHOLDS[deviceId] ?? { danger: DEFAULT_PM25_DANGER, safe: DEFAULT_PM25_SAFE };
+}
+
+function roomStateKey(deviceId: string) {
+  return `auto_room_state:${deviceId}`;
+}
+
+function parseRoomState(raw: string | null): AutoRoomState {
+  if (!raw) return { active: false };
+  try {
+    return JSON.parse(raw) as AutoRoomState;
+  } catch {
+    return { active: false };
+  }
+}
+
+async function loadRoomState(env: Env, deviceId: string): Promise<AutoRoomState> {
+  const raw = await env.CREDS_KV.get(roomStateKey(deviceId)).catch(() => null);
+  return parseRoomState(raw);
+}
+
+async function saveRoomState(env: Env, deviceId: string, state: AutoRoomState): Promise<void> {
+  await env.CREDS_KV.put(roomStateKey(deviceId), JSON.stringify(state));
+}
+
+async function controlDeviceMode(
+  env: Env,
+  device: DeviceConfig,
   power: boolean,
-  mode: number   // 0=Auto  2=Favorite (แรงสุด)
+  mode: number
 ): Promise<void> {
-  await Promise.allSettled(
-    DEVICES.map(async (device) => {
-      const modeSpec = device.props["mode"];
-      const powerSpec = device.props["power"];
-      const url = apiUrl(device.host, "/app/miotspec/prop/set");
+  await withWorkingCreds(env, async (creds) => {
+    const modeSpec = device.props["mode"];
+    const powerSpec = device.props["power"];
+    const url = apiUrl(device.host, "/app/miotspec/prop/set");
 
-      const props = [{ did: device.did, siid: powerSpec.siid, piid: powerSpec.piid, value: power }];
-      if (power && modeSpec) {
-        props.push({ did: device.did, siid: modeSpec.siid, piid: modeSpec.piid, value: mode });
-      }
+    const params = [{ did: device.did, siid: powerSpec.siid, piid: powerSpec.piid, value: power }];
+    if (power && modeSpec) {
+      params.push({ did: device.did, siid: modeSpec.siid, piid: modeSpec.piid, value: mode });
+    }
 
-      await xiaomiRequest(url, JSON.stringify({ params: props }), creds);
-    })
+    await xiaomiRequest(url, JSON.stringify({ params }), creds);
+  });
+}
+
+async function maybeSendDeadmanAlert(env: Env, nowTs: number): Promise<void> {
+  const lastCronTsRaw = await env.CREDS_KV.get("system:last_cron_ts").catch(() => null);
+  const lastAlertTsRaw = await env.CREDS_KV.get("system:last_deadman_alert_ts").catch(() => null);
+  const lastCronTs = lastCronTsRaw ? Number(lastCronTsRaw) : null;
+  const lastAlertTs = lastAlertTsRaw ? Number(lastAlertTsRaw) : 0;
+
+  if (lastCronTs && nowTs - lastCronTs > DEADMAN_ALERT_AFTER_SECONDS && nowTs - lastAlertTs > DEADMAN_ALERT_AFTER_SECONDS) {
+    await sendTelegram(
+      env,
+      `⚠️ <b>Deadman alert</b>\n\nระบบไม่ได้รัน cron ต่อเนื่องประมาณ ${Math.floor((nowTs - lastCronTs) / 60)} นาที`
+    );
+    await env.CREDS_KV.put("system:last_deadman_alert_ts", String(nowTs));
+  }
+}
+
+async function maybeSendTokenHealthAlert(env: Env, devices: DeviceRuntime[], nowTs: number): Promise<void> {
+  const hasTokenIssue = devices.some((device) => device.health === "token_expired");
+  if (!hasTokenIssue) return;
+
+  const lastAlertTsRaw = await env.CREDS_KV.get("system:last_token_alert_ts").catch(() => null);
+  const lastAlertTs = lastAlertTsRaw ? Number(lastAlertTsRaw) : 0;
+  if (nowTs - lastAlertTs < TOKEN_ALERT_TTL_SECONDS) return;
+
+  const lines = devices
+    .filter((device) => device.health === "token_expired")
+    .map((device) => `- ${device.name}`)
+    .join("\n");
+  const credStatus = await getCredStatus(env, nowTs);
+
+  await sendTelegram(
+    env,
+    `⚠️ <b>Xiaomi token health check</b>\n\nเครื่องที่มีปัญหา auth:\n${lines}\n\n` +
+    `source: ${credStatus.source} | working: ${credStatus.workingSource}\n` +
+    `อัปเดตล่าสุด: ${credStatus.updatedAt ? formatBangkokDate(credStatus.updatedAt) : "ไม่ทราบ"}\n` +
+    `ผ่านมาแล้ว: ${credStatus.ageDays ?? "—"} วัน | คาดว่าเหลือ: ${credStatus.estimatedDaysLeft ?? "—"} วัน\n\n` +
+    `ให้เช็ก passToken / secrets / KV`
   );
+  await env.CREDS_KV.put("system:last_token_alert_ts", String(nowTs));
 }
 
 // ── Auto-control logic (called from cron) ─────────────────────────────────────
 
-async function checkAndControl(
-  env: Env,
-  creds: XiaomiCreds,
-  devices: Array<{ name: string; online: boolean; values: Record<string, unknown> }>
-): Promise<void> {
-  // รวบรวม PM2.5 ทุกห้องที่ online
-  const pm25Values = devices
-    .filter((d) => d.online && typeof d.values.pm25 === "number")
-    .map((d) => ({ name: d.name, pm25: d.values.pm25 as number }));
+async function checkAndControl(env: Env, devices: DeviceRuntime[], nowTs: number): Promise<void> {
+  for (const runtime of devices) {
+    const pm25 = typeof runtime.values.pm25 === "number" ? (runtime.values.pm25 as number) : null;
+    if (!runtime.online || pm25 === null) continue;
 
-  if (pm25Values.length === 0) return;
+    const device = DEVICE_MAP.get(runtime.id);
+    if (!device) continue;
 
-  const maxPm25  = Math.max(...pm25Values.map((d) => d.pm25));
-  const worstRoom = pm25Values.find((d) => d.pm25 === maxPm25)!;
+    const thresholds = roomThresholds(runtime.id);
+    const state = await loadRoomState(env, runtime.id);
 
-  // อ่าน state ปัจจุบันจาก KV
-  const stateRaw   = await env.CREDS_KV.get("auto_control_active").catch(() => null);
-  const isActive   = stateRaw === "1";
+    if (pm25 > thresholds.danger && !state.active) {
+      await controlDeviceMode(env, device, true, 2);
+      await saveRoomState(env, runtime.id, { active: true, triggeredAt: nowTs, lastEscalatedAt: nowTs });
+      await sendTelegram(
+        env,
+        `🔴 <b>ฝุ่นเกินเกณฑ์</b>\n\nห้อง: ${runtime.name}\nPM2.5: ${pm25} µg/m³\nThreshold: > ${thresholds.danger}\n\n⚡ เปิดเครื่องห้องนี้และตั้งเป็น Favorite แล้ว\n(จะกลับ Auto เมื่อ PM2.5 ≤ ${thresholds.safe})`
+      );
+      continue;
+    }
 
-  if (maxPm25 >= PM25_DANGER && !isActive) {
-    // 🔴 เกิน threshold → เปิดแรงสุด
-    await setAllDevices(creds, true, 2);
-    await env.CREDS_KV.put("auto_control_active", "1");
+    if (pm25 > thresholds.danger && state.active) {
+      const triggeredAt = state.triggeredAt ?? nowTs;
+      const lastEscalatedAt = state.lastEscalatedAt ?? triggeredAt;
+      if (nowTs - triggeredAt >= ESCALATION_AFTER_SECONDS && nowTs - lastEscalatedAt >= ESCALATION_AFTER_SECONDS) {
+        await saveRoomState(env, runtime.id, { ...state, active: true, triggeredAt, lastEscalatedAt: nowTs });
+        await sendTelegram(
+          env,
+          `🟠 <b>ฝุ่นยังสูงต่อเนื่อง</b>\n\nห้อง: ${runtime.name}\nPM2.5: ${pm25} µg/m³\nเกินเกณฑ์ต่อเนื่องอย่างน้อย ${Math.floor((nowTs - triggeredAt) / 60)} นาที`
+        );
+      }
+      continue;
+    }
 
-    const lines = pm25Values.map((d) => `  ${d.name}: ${d.pm25} µg/m³`).join("\n");
-    await sendTelegram(env,
-      `🔴 <b>ฝุ่นเกินมาตรฐาน!</b>\n\n${lines}\n\n` +
-      `⚡ เปิดเครื่องกรองอากาศแรงสุดทุกห้องแล้ว\n` +
-      `(จะกลับ Auto เมื่อ PM2.5 &lt; ${PM25_SAFE} µg/m³)`
-    );
-
-  } else if (maxPm25 < PM25_SAFE && isActive) {
-    // 🟢 ปลอดภัยแล้ว → กลับ Auto mode
-    await setAllDevices(creds, true, 0);
-    await env.CREDS_KV.put("auto_control_active", "0");
-
-    const lines = pm25Values.map((d) => `  ${d.name}: ${d.pm25} µg/m³`).join("\n");
-    await sendTelegram(env,
-      `🟢 <b>อากาศปลอดภัยแล้ว</b>\n\n${lines}\n\n` +
-      `✅ กลับ Auto mode ทุกห้องแล้ว`
-    );
+    if (pm25 <= thresholds.safe && state.active) {
+      await controlDeviceMode(env, device, true, 0);
+      await saveRoomState(env, runtime.id, { active: false });
+      await sendTelegram(
+        env,
+        `🟢 <b>อากาศกลับมาปลอดภัย</b>\n\nห้อง: ${runtime.name}\nPM2.5: ${pm25} µg/m³\n✅ กลับเป็น Auto แล้ว`
+      );
+    }
   }
 }
 
 // ── D1 logging helper ─────────────────────────────────────────────────────────
 
 async function logDevicesToD1(env: Env): Promise<void> {
-  const creds = await loadCreds(env);
-  if (!creds) return;
-
-  const results = await Promise.allSettled(DEVICES.map((d) => fetchOneDevice(d, creds)));
+  const results = await Promise.allSettled(DEVICES.map((d) => fetchOneDeviceWithFallback(env, d)));
   const ts = Math.floor(Date.now() / 1000);
 
-  const devices = results.map((r, i) =>
-    r.status === "fulfilled" ? r.value : { ...DEVICES[i], online: false, values: {}, fetched_at: ts }
-  );
+  await maybeSendDeadmanAlert(env, ts);
+
+  const devices = await Promise.all(results.map((r, i) =>
+    r.status === "fulfilled" ? Promise.resolve(r.value as DeviceRuntime) : buildStaleDevice(env, DEVICES[i], ts, r.reason)
+  ));
 
   // บันทึก D1
   const stmt = env.DB.prepare(
@@ -595,8 +868,10 @@ async function logDevicesToD1(env: Env): Promise<void> {
 
   if (inserts.length > 0) await env.DB.batch(inserts);
 
-  // ตรวจสอบ PM2.5 และควบคุมอัตโนมัติ
-  await checkAndControl(env, creds, devices);
+  await env.CREDS_KV.put("system:last_cron_ts", String(ts));
+  await maybeSendTokenHealthAlert(env, devices, ts);
+  await maybeSendScheduledReport(env, devices, ts);
+  await checkAndControl(env, devices, ts);
 }
 
 // ── Credential management (KV-backed with fallback to secrets) ────────────────
@@ -608,34 +883,83 @@ interface StoredCreds {
   updatedAt: number; // unix timestamp
 }
 
-async function loadCreds(env: Env): Promise<XiaomiCreds | null> {
-  // Try KV first
+interface CredStatus {
+  source: "kv" | "secrets" | "none";
+  workingSource: "kv" | "secrets" | "none";
+  updatedAt: number | null;
+  userId: string | null;
+  ageDays: number | null;
+  estimatedDaysLeft: number | null;
+}
+
+type CredSource = "kv" | "secrets";
+
+interface LoadedCreds extends XiaomiCreds {
+  source: CredSource;
+}
+
+async function loadCredCandidates(env: Env): Promise<LoadedCreds[]> {
+  const candidates: LoadedCreds[] = [];
+
   if (env.CREDS_KV) {
     try {
       const raw = await env.CREDS_KV.get("xiaomi_creds");
       if (raw) {
         const parsed = JSON.parse(raw) as StoredCreds;
-        return {
+        candidates.push({
           userId: parsed.userId,
           serviceToken: parsed.serviceToken,
           ssecurity: parsed.ssecurity,
-        };
+          source: "kv",
+        });
       }
     } catch {
       // KV read failed, fall through to secrets
     }
   }
 
-  // Fallback to wrangler secrets
   if (env.XIAOMI_USER_ID && env.XIAOMI_SERVICE_TOKEN && env.XIAOMI_SSECURITY) {
-    return {
+    const secretsCreds: LoadedCreds = {
       userId: env.XIAOMI_USER_ID,
       serviceToken: env.XIAOMI_SERVICE_TOKEN,
       ssecurity: env.XIAOMI_SSECURITY,
+      source: "secrets",
     };
+
+    const duplicate = candidates.some(
+      (candidate) =>
+        candidate.userId === secretsCreds.userId &&
+        candidate.serviceToken === secretsCreds.serviceToken &&
+        candidate.ssecurity === secretsCreds.ssecurity
+    );
+    if (!duplicate) candidates.push(secretsCreds);
   }
 
-  return null;
+  return candidates;
+}
+
+async function loadCreds(env: Env): Promise<XiaomiCreds | null> {
+  const [first] = await loadCredCandidates(env);
+  return first ?? null;
+}
+
+async function detectWorkingCredSource(env: Env): Promise<"kv" | "secrets" | "none"> {
+  const candidates = await loadCredCandidates(env);
+  if (candidates.length === 0) return "none";
+
+  for (const creds of candidates) {
+    try {
+      await fetchOneDevice(DEVICES[0], creds);
+      if (creds.source === "secrets") {
+        await saveCredsToKV(env, creds);
+      }
+      return creds.source;
+    } catch (err) {
+      if (!isTokenExpiredException(err)) throw err;
+    }
+  }
+
+  return "none";
 }
 
 function isTokenExpiredError(responseText: string): boolean {
@@ -664,6 +988,126 @@ async function saveCredsToKV(env: Env, creds: XiaomiCreds): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function getCredStatus(env: Env, nowTs: number): Promise<CredStatus> {
+  let source: CredStatus["source"] = "secrets";
+  let updatedAt: number | null = null;
+
+  if (env.CREDS_KV) {
+    try {
+      const raw = await env.CREDS_KV.get("xiaomi_creds");
+      if (raw) {
+        const parsed = JSON.parse(raw) as StoredCreds;
+        source = "kv";
+        updatedAt = parsed.updatedAt;
+      }
+    } catch {
+      source = "secrets";
+    }
+  } else if (!env.XIAOMI_USER_ID || !env.XIAOMI_SERVICE_TOKEN || !env.XIAOMI_SSECURITY) {
+    source = "none";
+  }
+
+  const workingSource = await detectWorkingCredSource(env);
+  const userId = (await loadCreds(env))?.userId ?? null;
+  const ageDays = updatedAt ? Math.floor((nowTs - updatedAt) / 86400) : null;
+  const estimatedDaysLeft = ageDays === null ? null : Math.max(0, 30 - ageDays);
+
+  return { source, workingSource, updatedAt, userId, ageDays, estimatedDaysLeft };
+}
+
+function isTokenExpiredException(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("TOKEN_EXPIRED") || isTokenExpiredError(message);
+}
+
+async function withWorkingCreds<T>(
+  env: Env,
+  action: (creds: XiaomiCreds) => Promise<T>
+): Promise<T> {
+  const candidates = await loadCredCandidates(env);
+  if (candidates.length === 0) {
+    throw new Error("Xiaomi credentials not configured");
+  }
+
+  let lastError: unknown = null;
+
+  for (const creds of candidates) {
+    try {
+      const result = await action(creds);
+      if (creds.source === "secrets") {
+        await saveCredsToKV(env, creds);
+      }
+      return result;
+    } catch (err) {
+      lastError = err;
+      if (!isTokenExpiredException(err)) throw err;
+    }
+  }
+
+  throw lastError ?? new Error("No working Xiaomi credentials found");
+}
+
+async function fetchOneDeviceWithFallback(env: Env, device: DeviceConfig) {
+  return withWorkingCreds(env, (creds) => fetchOneDevice(device, creds));
+}
+
+function classifyDeviceError(err: unknown): Pick<DeviceRuntime, "health" | "error"> {
+  const message = err instanceof Error ? err.message : String(err);
+  if (isTokenExpiredException(err)) {
+    return { health: "token_expired", error: message };
+  }
+  return { health: "api_error", error: message };
+}
+
+async function buildStaleDevice(
+  env: Env,
+  device: DeviceConfig,
+  nowTs: number,
+  failure?: unknown
+): Promise<DeviceRuntime> {
+  const staleCutoff = nowTs - 7200;
+  const issue = failure ? classifyDeviceError(failure) : { health: "stale" as const, error: undefined };
+
+  try {
+    const row = await env.DB.prepare(
+      `SELECT * FROM readings WHERE device_id = ? AND ts > ? ORDER BY ts DESC LIMIT 1`
+    ).bind(device.id, staleCutoff).first();
+
+    if (row) {
+      return {
+        id: device.id,
+        name: device.name,
+        did: device.did,
+        host: device.host,
+        online: false,
+        stale: true,
+        source: "d1",
+        health: issue.health === "token_expired" ? "token_expired" : "stale",
+        error: issue.error,
+        fetched_at: row.ts as number,
+        values: {
+          pm25:   row.pm25        ?? undefined,
+          pm10:   row.pm10        ?? undefined,
+          aqi:    row.aqi         ?? undefined,
+          temp:   row.temperature ?? undefined,
+          hum:    row.humidity    ?? undefined,
+          power:  row.power != null ? Boolean(row.power) : undefined,
+        },
+      };
+    }
+  } catch {
+    // ignore D1 fallback errors
+  }
+
+  return {
+    ...deviceSkeleton(device, false),
+    source: "d1",
+    health: issue.health,
+    error: issue.error,
+    fetched_at: nowTs,
+  };
 }
 
 // ── Request router ────────────────────────────────────────────────────────────
@@ -726,9 +1170,9 @@ export default {
       return jsonResponse({ stats: result.results }, 200, origin);
     }
 
-    const creds = await loadCreds(env);
+    const hasCreds = (await loadCredCandidates(env)).length > 0;
 
-    if (!creds) {
+    if (!hasCreds) {
       return errorResponse("Xiaomi credentials not configured", 500, origin);
     }
 
@@ -736,40 +1180,14 @@ export default {
     if (request.method === "GET" && path === "/api/devices") {
       try {
         const results = await Promise.allSettled(
-          DEVICES.map((d) => fetchOneDevice(d, creds))
+          DEVICES.map((d) => fetchOneDeviceWithFallback(env, d))
         );
 
-        // For offline devices, fall back to most recent D1 reading (≤ 2 hours old)
-        const staleCutoff = Math.floor(Date.now() / 1000) - 7200;
+        const nowTs = Math.floor(Date.now() / 1000);
         const devices = await Promise.all(results.map(async (r, i) => {
           if (r.status === "fulfilled") return r.value;
           console.error(`Failed to fetch ${DEVICES[i].id}: ${r.reason}`);
-
-          // Try last known value from D1
-          try {
-            const row = await env.DB.prepare(
-              `SELECT * FROM readings WHERE device_id = ? AND ts > ? ORDER BY ts DESC LIMIT 1`
-            ).bind(DEVICES[i].id, staleCutoff).first();
-            if (row) {
-              return {
-                id: DEVICES[i].id,
-                name: DEVICES[i].name,
-                did: DEVICES[i].did,
-                host: DEVICES[i].host,
-                online: false,
-                stale: true,
-                fetched_at: row.ts as number,
-                values: {
-                  pm25:   row.pm25   ?? undefined,
-                  temp:   row.temperature ?? undefined,
-                  hum:    row.humidity   ?? undefined,
-                  power:  row.power != null ? Boolean(row.power) : undefined,
-                },
-              };
-            }
-          } catch { /* ignore D1 errors */ }
-
-          return deviceSkeleton(DEVICES[i], false);
+          return buildStaleDevice(env, DEVICES[i], nowTs, r.reason);
         }));
 
         return jsonResponse({ devices }, 200, origin);
@@ -787,10 +1205,11 @@ export default {
         return errorResponse(`Unknown device id: ${deviceId}`, 404, origin);
       }
       try {
-        const result = await fetchOneDevice(device, creds);
+        const result = await fetchOneDeviceWithFallback(env, device);
         return jsonResponse(result, 200, origin);
       } catch (err) {
-        return errorResponse(String(err), 502, origin);
+        const stale = await buildStaleDevice(env, device, Math.floor(Date.now() / 1000), err);
+        return jsonResponse(stale, 200, origin);
       }
     }
 
@@ -821,7 +1240,9 @@ export default {
       const dataJson = JSON.stringify({ params });
 
       try {
-        const result = await xiaomiRequest(controlUrl, dataJson, creds);
+        const result = await withWorkingCreds(env, (creds) =>
+          xiaomiRequest(controlUrl, dataJson, creds)
+        );
         return jsonResponse({ ok: true, result }, 200, origin);
       } catch (err) {
         return errorResponse(String(err), 502, origin);
@@ -845,12 +1266,13 @@ export default {
         try {
           while (true) {
             const results = await Promise.allSettled(
-              DEVICES.map((d) => fetchOneDevice(d, creds))
+              DEVICES.map((d) => fetchOneDeviceWithFallback(env, d))
             );
-            const devices = results.map((r, i) => {
+            const nowTs = Math.floor(Date.now() / 1000);
+            const devices = await Promise.all(results.map((r, i) => {
               if (r.status === "fulfilled") return r.value;
-              return deviceSkeleton(DEVICES[i], false);
-            });
+              return buildStaleDevice(env, DEVICES[i], nowTs, r.reason);
+            }));
             await sendEvent({ devices });
             // Wait 30 seconds before next poll
             await new Promise<void>((resolve) => setTimeout(resolve, 30_000));
@@ -966,23 +1388,7 @@ export default {
       if (secret !== env.LOG_SECRET && authHeader !== `Bearer ${env.LOG_SECRET}`) {
         return errorResponse("Unauthorized", 401, origin);
       }
-
-      let source = "secrets";
-      let updatedAt: number | null = null;
-      if (env.CREDS_KV) {
-        try {
-          const raw = await env.CREDS_KV.get("xiaomi_creds");
-          if (raw) {
-            const parsed = JSON.parse(raw) as StoredCreds;
-            source = "kv";
-            updatedAt = parsed.updatedAt;
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      return jsonResponse({ source, updatedAt, userId: (await loadCreds(env))?.userId ?? null }, 200, origin);
+      return jsonResponse(await getCredStatus(env, Math.floor(Date.now() / 1000)), 200, origin);
     }
 
     return errorResponse("Not found", 404, origin);

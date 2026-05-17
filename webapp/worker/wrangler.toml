@@ -1,0 +1,21 @@
+name = "air-quality-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Cron trigger — log device readings to D1 every 5 minutes
+[triggers]
+crons = ["*/5 * * * *"]
+
+# D1 database binding
+[[d1_databases]]
+binding  = "DB"
+database_name = "air-quality-db"
+database_id   = "17bc93e3-695c-4774-b616-f88b1e66c93b"
+
+# KV for storing Xiaomi credentials (auto-renewable)
+[[kv_namespaces]]
+binding = "CREDS_KV"
+id = "a90e28f34e0343aea38d28ebcd8f18d5"
+
+# [vars] is for non-sensitive config only.
+[vars]
