@@ -1,14 +1,16 @@
 """
 Login Xiaomi manually in browser → intercept ssecurity from API response → update Cloudflare secrets.
 """
-import json, sys, time, subprocess
+import json, os, sys, time, subprocess
 sys.stdout.reconfigure(encoding='utf-8')
 from playwright.sync_api import sync_playwright
 
+EMAIL_HINT = os.environ.get("XIAOMI_EMAIL", "(set $XIAOMI_EMAIL to prefill)")
+
 print("=" * 55)
 print("LOGIN XIAOMI — ทำตามขั้นตอน:")
-print("1. กรอก Email: nuciferx@gmail.com")
-print("2. กรอก Password: REDACTED_XIAOMI_PASSWORD")
+print(f"1. กรอก Email: {EMAIL_HINT}")
+print("2. กรอก Password ของคุณเอง")
 print("3. แก้ CAPTCHA ถ้ามี")
 print("4. อนุมัติ 2FA บนมือถือ")
 print("5. รอ browser redirect ไปหน้า home")
