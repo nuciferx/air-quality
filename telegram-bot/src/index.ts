@@ -19,6 +19,9 @@ export interface Env {
   WORKER_API_URL: string;
   AIR_QUALITY_API: { fetch: (req: Request) => Promise<Response> };
   BOT_KV: KVNamespace;
+  GH_DISPATCH_TOKEN: string;
+  GH_REPO: string;
+  ALLOWED_CHAT_ID: string;
 }
 
 interface TelegramLocation {
@@ -453,6 +456,31 @@ async function handleTokenStatus(env: Env): Promise<string> {
     `คาดว่าเหลือก่อนหมดอายุ: ${status.estimatedDaysLeft ?? "—"} วัน`;
 }
 
+async function handleRenew(env: Env, chatId: number): Promise<string> {
+  const cooldownKey = `bot:renew:cooldown:${chatId}`;
+  if (await env.BOT_KV.get(cooldownKey)) return "⏳ cooldown — ลองอีกครั้งใน ~10 นาที";
+  const res = await fetch(
+    `https://api.github.com/repos/${env.GH_REPO}/actions/workflows/auto-renew.yml/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.GH_DISPATCH_TOKEN}`,
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "air-quality-bot",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      body: JSON.stringify({ ref: "master" }),
+    }
+  );
+  if (res.status === 204) {
+    await env.BOT_KV.put(cooldownKey, "1", { expirationTtl: 600 });
+    return "✅ เริ่ม workflow แล้ว — รอแจ้งเตือนอีกครั้งใน ~60 วินาที";
+  }
+  if (res.status === 401 || res.status === 403) return "❌ GitHub auth fail — เช็ก GH_DISPATCH_TOKEN";
+  if (res.status === 404) return "❌ ไม่พบ workflow auto-renew.yml — เช็ก GH_REPO";
+  return `❌ workflow_dispatch ล้มเหลว (HTTP ${res.status})`;
+}
+
 // ── Webhook handler ───────────────────────────────────────────────────────────
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
@@ -466,6 +494,9 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   if (!message) return new Response("OK");
 
   const chatId = message.chat.id;
+  if (String(chatId) !== env.ALLOWED_CHAT_ID) {
+    return new Response("OK");
+  }
   const text = message.text?.trim();
   const username = message.from?.username;
 
@@ -491,6 +522,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 /weather — สภาพอากาศตำแหน่งล่าสุด
 /weather_home — สภาพอากาศที่บ้าน
 /token — สถานะโทเคน Xiaomi
+/renew — หมุนโทเคน Xiaomi (cooldown 10 นาที)
 /ai [ข้อความ] — ถาม AI เกี่ยวกับคุณภาพอากาศ
 /help — แสดงคำสั่งนี้
 
@@ -512,6 +544,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     response = await handleWeatherHome();
   } else if (text === "/token") {
     response = await handleTokenStatus(env);
+  } else if (text === "/renew") {
+    response = await handleRenew(env, chatId);
   } else if (text.startsWith("/on ")) {
     const room = text.slice(4).trim();
     response = await handleControl(env, chatId, room, "on");
@@ -531,6 +565,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     response = `⚠️ เกิดข้อผิดพลาด: ${String(err).substring(0, 200)}`;
   }
 
+  if (!response) return new Response("OK");
   await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, response);
   return new Response("OK");
 }
@@ -561,7 +596,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(JSON.stringify({
         bot: "Air Quality Bot",
-        commands: ["/status", "/predict", "/on", "/off", "/weather", "/weather_home", "/token", "/ai", "/help"],
+        commands: ["/status", "/predict", "/on", "/off", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
       }), { headers: { "Content-Type": "application/json" } });
     }
 

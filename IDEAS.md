@@ -93,3 +93,27 @@ PM2.5 < 15  → ปิดเครื่อง (ประหยัดไฟ)
 | 2 | Morning Report | ง่าย | เห็น pattern รายวัน |
 | 3 | Auto Control | ปานกลาง | สะดวก ประหยัดไฟ |
 | 4 | Outdoor vs Indoor | ปานกลาง | หาต้นตอฝุ่น |
+
+---
+
+## Invent Backlog (queued)
+
+> โซนนี้คือคิวสำหรับ `/aq-invent` และ `/aq-invent-loop`
+> สถานะ: `invent-queued` → `invent-in-progress` → `invent-done-go (→ docs/invent/<name>.md)` หรือ `invent-done-nogo`
+> เพิ่ม idea ใหม่ผ่าน `/idea` (verdict Build จะมาลงที่นี่อัตโนมัติ)
+
+### inv-2026-05-17-bot-renew — /renew command on Telegram bot
+- **Status:** dev-done-shipped (2026-05-17, bot version d84019e1, → docs/invent/bot-renew.md)
+- **Priority:** p-high
+- **Tags:** bot, gh-actions, security
+- **Summary:** สั่ง renew CN token จาก Telegram (`/renew`) → POST GitHub `workflow_dispatch` → poll → ตอบกลับ
+- **Why now:** CN token TTL ~7d ([[cn-token-short-ttl]]) ตอนนี้ user ต้องเปิดเว็บ Actions กดเอง
+- **Smallest version:** 1 command + 1 secret (`GH_DISPATCH_TOKEN`) + cooldown 10 min + ALLOWED_CHAT_ID gate
+
+<!-- เพิ่ม entry ใหม่ใต้นี้ ใช้ pattern เดียวกัน -->
+
+---
+
+## Dropped (with reason)
+
+<!-- บันทึก idea ที่ drop เพื่อกัน loop เดิมวนกลับ — format: `<id> — <reason 1 line>` -->

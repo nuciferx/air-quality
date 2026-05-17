@@ -6,6 +6,7 @@ compatibility_date = "2024-01-01"
 QWEN_API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 QWEN_MODEL = "qwen-turbo"
 WORKER_API_URL = "https://air-quality-api.ideaplanstudio.workers.dev"
+GH_REPO = "nuciferx/air-quality"
 
 # Service binding — direct worker-to-worker (bypasses zone restriction)
 [[services]]
