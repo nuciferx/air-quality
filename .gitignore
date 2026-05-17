@@ -1,7 +1,40 @@
+# ── Secrets / credentials ───────────────────────────────────────────────
 .env
+.env.*
+!.env.example
 *.json
 !package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.*.json
+.2fa_url
+creds.json
+
+# ── Python ──────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 .venv/
 venv/
+
+# ── Node / Next.js / Wrangler / Vercel ──────────────────────────────────
+node_modules/
+.next/
+.vercel/
+.wrangler/
+dist/
+*.tsbuildinfo
+
+# ── Local state / logs ──────────────────────────────────────────────────
+*.log
+.session_state.json
+
+# ── Windows artifacts ───────────────────────────────────────────────────
+desktop.ini
+Thumbs.db
+
+# ── macOS ───────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Windows file-explorer duplicates (e.g. ".vercel (1)", ".gitignore (1)")
+*\ \(1\)
+*\ \(1\)/
