@@ -320,3 +320,135 @@ python3 get_token_passtoken.py   # manual renew (Mac + Chrome)
 - ห้าม hardcode token/secrets ในโค้ด
 - ห้ามลบ scheduled reports โดยไม่บอก
 - ห้ามเปลี่ยน auto-control thresholds โดยไม่อัปเดตทั้ง worker + README + IDEAS
+
+---
+
+## 16. Air Quality Agent Operating Loop — GTM Infinite Loop
+
+โปรเจกต์นี้รับโปรโตคอลการทำงานของ agent มาจากโปรเจกต์พี่น้อง `bma-plan` (GTM Infinite Loop 7 ขั้น) แต่ปรับให้เข้ากับบริบทของ aq ซึ่งมี **production cron `*/5 min`** + Xiaomi 4 เครื่อง + คน 1 ครอบครัวที่หายใจฝุ่นจริง ๆ — blast radius ของบั๊กที่ปล่อยลง prod ไม่ใช่แค่ UI พัง
+
+> สรุปสั้น: ทุก sprint ของ aq ต้องเดินผ่าน 7 ขั้นนี้ตามลำดับ ห้ามข้าม "Restoration" ไปทำ "Kaizen" ก่อน
+
+### 16.1 ขั้นทั้ง 7 (ปรับเข้า aq context)
+
+#### 1. Understanding Condition
+ก่อนแตะโค้ดต้องรู้:
+- production health (เรียก `/health` + `/api/devices` + `/api/creds`)
+- token age + source (KV vs secrets — ดู §2, §6)
+- last cron tick (`system:last_cron_ts` ใน KV)
+- scope ของงานครั้งนี้แตะ layer ไหนบ้าง — worker / frontend / bot / GH Actions / D1 / KV / secrets
+- มี anomaly อะไรค้างใน `PROGRESS.md` / `IDEAS.md`
+
+ใช้ `/aq-start` หรือ subagent `usage-analyst` ดึงตัวเลขจริง — **ห้าม assume จาก README อย่างเดียว**
+
+#### 2. Restoration
+aq **ไม่ใช่** `git reset --hard` style เพราะ prod ยังหายใจอยู่ — Restoration หมายถึง:
+- ถ้า cron เงียบ / device ตก → revert ไป commit ล่าสุดที่ smoke pass ก่อน แล้ว verify ด้วย curl
+- ถ้า "stale KV creds" → รัน `python3 get_token_passtoken.py` + `POST /api/renew` (ไม่ใช่ `git revert`)
+- ถ้า 5-point sync drift (§3) → ซิงค์กลับให้ครบ 5 จุดก่อนทำอย่างอื่น
+- ถ้า secret rotation ค้าง → `wrangler secret put ...` แล้ว **`wrangler deploy` ทันที** (ไม่ deploy = secret ไม่โหลด — §12)
+
+Core workflow ที่ต้องกลับมา green ก่อนทำต่อ:
+- `/health` ตอบ 200
+- `/api/devices` คืน 4 เครื่อง พร้อม pm25 > 0
+- cron tick ล่าสุด ≤ 5 นาที (`system:last_cron_ts`)
+- Telegram bot ตอบ `/status`
+- frontend dashboard โหลด realtime ได้
+
+#### 3. Defect Factors Analysis
+จัด defect ของ aq ออกเป็นหมวด — top-level categories:
+1. **5-point sync drift** (§3) — DEVICES / ROOM_THRESHOLDS / DEVICE_INFO / DEVICE_PROP_SPECS / DEVICE_MODES ไม่ตรงกัน
+2. **siid/piid mismatch** — device ใหม่ / firmware update / guess ไม่ verify ด้วย `verify_pm25.py`
+3. **Credential chain break** — KV stale / secret ไม่ deploy / passToken หมดอายุ (code 70016)
+4. **Host routing error** — `sg` vs `cn` (§3) — CN device offline เงียบ ๆ ไม่ error
+5. **Cron / deadman drift** — schedule เปลี่ยน แต่ deadman threshold ไม่เปลี่ยน (§6)
+6. **Auto-control state corruption** — `auto_room_state:{id}` ใน KV ค้าง / escalation loop
+7. **Service binding break** — bot fallback ไป HTTP แทน binding (ผิดตาม §1)
+8. **Deploy order error** — deploy frontend ก่อน worker → frontend เรียก endpoint ที่ยังไม่มี
+9. **Stale docs** — AGENTS.md / README.md / PROGRESS.md ไม่ตรง prod
+10. **Scope leakage** — sprint ขอ 1 feature แต่ดันแก้ device mapping ด้วย
+
+#### 4. Eliminating Factors of Defect
+แก้ root cause + ใส่ regression guard เท่าที่ทำได้ (โดยที่ repo นี้ไม่มี automated tests):
+- ทุกการแก้ที่กระทบ siid/piid → ต้อง verify ด้วย `python3 verify_pm25.py` ก่อนและหลัง
+- ทุกการแก้ secret → `wrangler secret put` + `wrangler deploy` + curl smoke (deploy gate ของ `/aq-dev-loop` **ห้ามข้าม**)
+- ทุกการแก้ device list → checklist 5 จุดของ §3 ต้องเทียบครบ
+- ทุกการแก้ที่กระทบ cron → ดู deadman + report slot (§6, §7) พร้อมกัน
+- หลังแก้ → `npx wrangler tail` รอ cron tick ถัดไปจริง ก่อนปิด sprint
+
+#### 5. Setting Condition
+ล็อกมาตรฐานใหม่ด้วยเอกสาร:
+- update `AGENTS.md` ถ้าเปลี่ยน rule (เช่น threshold, schedule, device list)
+- update `README.md` ถ้าเปลี่ยน endpoint หรือคำสั่ง deploy
+- update `PROGRESS.md` ใส่ entry sprint ล่าสุด
+- update `IDEAS.md` ถ้า idea เดินไปขั้น Build/Spike/Drop
+- update `docs/process/SPRINT_INDEX.md` row + `CURRENT_STATUS.md` + `NEXT_ACTION.md`
+
+#### 6. Condition Kaizen
+ปรับปรุง UX / code / docs **เฉพาะใน scope sprint** ห้ามเปิดงานใหม่กลางทาง:
+- เห็นบั๊กนอก scope → จด `IDEAS.md` ไม่ใช่แก้เลย
+- เห็น tech debt นอก scope → จด `IDEAS.md` ไม่ใช่ refactor เลย
+- การ refactor ที่ข้าม ≥4 ไฟล์คล้ายกันถึงค่อยพิจารณา abstraction ใหม่ (ตาม planner rule)
+
+#### 7. Condition Management
+ปิด sprint อย่างชัดเจน:
+- mark PASS / FAIL พร้อม smoke evidence (curl output / wrangler tail snippet)
+- ระบุ known gap ที่ยังเหลือ
+- ชี้ next action ลง `NEXT_ACTION.md`
+- ถ้า ship จริง → append `docs/status/COMMIT_HISTORY.md` + smoke ลง `docs/status/TEST_BASELINE.md` หรือ `TEST_RESULT.md`
+
+---
+
+### 16.2 Agent Role Mapping (aq 8 agents → GTM Agent 0–4)
+
+| GTM Role | aq Agent | หน้าที่ในลูป |
+|----------|----------|--------------|
+| **Agent 0 — Planner / Orchestrator** | `air-quality-planner` | ขั้น 1–3 หลัก: เข้าใจสภาพ, สั่ง restoration, แตก defect factor, ออกแผน file-by-file |
+| **Agent 0 — Research / Divergent** | `aq-researcher`, `aq-inventor` | ขั้น 1 (research) + ขั้น 6 (kaizen ideation) — feed planner |
+| **Agent 1 — Coder (Worker + Frontend)** | `webapp-editor` | ขั้น 4: แก้ root cause ใน `webapp/worker/*` + `webapp/frontend/*` |
+| **Agent 1 — Coder (Bot)** | `telegram-bot-editor` | ขั้น 4: แก้ root cause ใน `telegram-bot/*` |
+| **Agent 2 — Reviewer / Tester** | `xiaomi-debugger`, `deploy-checker` | ขั้น 2 (restoration verify) + ขั้น 4 (regression check) + pre-deploy gate ก่อนผ่าน §12 |
+| **Agent 2 — Evidence** | `usage-analyst` | ขั้น 1 (baseline) + ขั้น 4 (verify ว่า fix ลดอาการจริง) — read-only D1/KV |
+| **Agent 3 — Docs / Condition Setting** | _[`aq-doc-auditor` — coming Slice 4]_ | ขั้น 5: ล็อก AGENTS.md / README.md / PROGRESS.md / IDEAS.md ให้ตรง prod |
+| **Agent 4 — Final Reporter / Condition Management** | `air-quality-planner` (rewrap) | ขั้น 7: ปิด sprint, mark PASS/FAIL, ชี้ next action |
+
+> Agent ตัวเดียวอาจสวมหลายบทบาทในลูปเดียว — `air-quality-planner` ทำทั้ง Agent 0 และ Agent 4 ในหลาย sprint
+
+---
+
+### 16.3 Sprint Output Requirements (mandatory artifacts)
+
+ทุก sprint ของ aq ต้อง emit:
+
+- `sprints/active/<YYYY-MM-DD>-<slug>/RUN_<UPPER_SNAKE>.md` — สเปก sprint ตอนเริ่ม
+- `sprints/completed/<YYYY-MM-DD>-<slug>/RUN_<UPPER_SNAKE>.md` — final version หลังปิด
+- update row ใน `docs/process/SPRINT_INDEX.md`
+- update `log.md` (running log)
+- update `CURRENT_STATUS.md` (1 บรรทัด + pointer)
+- update `NEXT_ACTION.md`
+- ถ้า ship จริง: append `docs/status/COMMIT_HISTORY.md` + smoke results ลง `docs/status/TEST_BASELINE.md` หรือ `TEST_RESULT.md`
+
+(ถ้า sprint เป็น docs-only ข้ามได้เฉพาะ COMMIT_HISTORY / TEST_BASELINE)
+
+---
+
+### 16.4 Phase Rule (aq-specific)
+
+aq โตเป็น 3 phase — agent ต้องรู้ว่าตัวเองอยู่ phase ไหน เพื่อไม่ออกแบบเกินตัว:
+
+- **Phase A — ตอนนี้ (production-stable):** monitoring + auto-control per-room (§6) + bot remote control (§8) + token health (§2, §9). ทุกอย่างเสถียร อยู่ในขั้น Condition Management
+- **Phase B — ถัดไป:** analytics / digest / cross-room comparison / outdoor-vs-indoor (ตาม `IDEAS.md` #2, #3, `/analyze`) — งาน Kaizen ระดับ feature
+- **Phase C — อนาคต:** automation Kaizen — adaptive thresholds, predictive token renew, multi-home support
+
+> **Phase gate:** ห้ามทำงาน Phase B ถ้า Phase A มี anomaly ค้าง (เช่น cron drift, token alert ค้าง 6 ชม.) — Restoration ก่อนเสมอ
+
+---
+
+### 16.5 Cross-reference
+
+- 5-point device-sync rule → §3
+- Auto-control per-room state + KV keys → §6
+- Scheduled reports + dedup slot → §7
+- Token renewal workflow → §2, §9
+- Deploy gate (`wrangler deploy` หลังเปลี่ยน secret) → §12
+- ห้ามทำ (hard rules) → §15
