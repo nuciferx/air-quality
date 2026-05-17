@@ -49,8 +49,8 @@ DEVICES = [
         "props": [
             (2, 1, "power"),
             (2, 2, "mode"),
-            (3, 1, "pm25"),
-            (3, 3, "temperature"),
+            (3, 1, "pm25"),        # µg/m³ (verified)
+            (3, 3, "temperature"),  # °C
             (4, 1, "filter"),
         ],
     },
@@ -63,8 +63,8 @@ DEVICES = [
         "props": [
             (2, 1, "power"),
             (2, 2, "mode"),
-            (3, 1, "pm25"),
-            (3, 3, "temperature"),
+            (3, 1, "pm25"),        # µg/m³ (verified)
+            (3, 3, "temperature"),  # °C
             (4, 1, "filter"),
         ],
     },
@@ -77,8 +77,8 @@ DEVICES = [
         "props": [
             (2, 1, "power"),
             (2, 2, "mode"),
-            (3, 1, "pm25"),
-            (3, 3, "temperature"),
+            (3, 1, "pm25"),        # µg/m³ (verified)
+            (3, 3, "temperature"),  # °C
             (4, 1, "filter"),
         ],
     },
