@@ -2,8 +2,10 @@ name: Auto-Renew Xiaomi Token
 
 on:
   schedule:
-    # Run every 25 days at 02:00 UTC
-    - cron: "0 2 */25 * *"
+    # Weekly — Monday 02:00 UTC (09:00 Asia/Bangkok).
+    # CN-region serviceToken expires in ~7 days, so a 25-day schedule was
+    # leaving maxpro/maxdown/cat offline mid-cycle. Weekly keeps CN alive.
+    - cron: "0 2 * * 1"
   workflow_dispatch:
 
 jobs:
