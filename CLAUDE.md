@@ -143,4 +143,5 @@ Custom agents live under `.claude/agents/`. Invoke via the Agent tool with `suba
 
 | Skill | Trigger | Purpose |
 |-------|---------|---------|
+| `/aq-start` | `/aq-start` or "เริ่มเลย" / "สถานะตอนนี้" at session start | One-shot orientation board (production health, token age, repo state, active memories, anomalies). ≤200 words, no code exploration. Hands off to the right agent based on what the dashboard surfaces. |
 | `/idea` | `/idea <text>` or "ลองคิดดูว่าจะเพิ่ม X ดีไหม" | Produces a ≤300-word decision doc (Build / Spike / Backlog / Drop) without writing code. Trusts `CLAUDE.md` + `AGENTS.md` + `IDEAS.md` + `PROGRESS.md` instead of re-exploring — token-lean. After Build verdict, hand off to `air-quality-planner`; use `usage-analyst` first if you need data evidence. |
