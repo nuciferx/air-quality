@@ -1,6 +1,6 @@
 # Air Quality Project — Progress Log
 
-อัพเดทล่าสุด: 2026-04-13
+อัพเดทล่าสุด: 2026-06-23
 
 ---
 
@@ -32,6 +32,16 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 ---
 
 ## ✅ Features
+
+### Sprint 2026-06-23 — Vacuum support + US host routing
+- เพิ่ม host `us` → `https://us.api.io.mi.com` ใน `apiUrl()` (worker)
+- เพิ่ม `VACUUMS` registry แยกจาก `DEVICES` — ไม่เข้า D1 / auto-control / deadman / SSE
+- เพิ่ม `fetchVacuumProps()` + `invokeAction()` helpers (zero-deps, reuse RC4 signing)
+- endpoint ใหม่: `GET /api/vacuum`, `POST /api/vacuum/action`
+- Frontend: `Vacuum` interface + `getVacuums()` + `sendVacuumAction()` ใน `lib/api.ts`
+- Component ใหม่: `VacuumCard.tsx` (battery, status ไทย, clean_area/time, life bars, action buttons)
+- `page.tsx`: section "หุ่นยนต์ดูดฝุ่น" แยกใต้ grid เครื่องฟอก
+- docs: `AGENTS.md` §3 host routing table + vacuum isolation note, §4 endpoint table; `README.md` device table + API table
 
 ### Phase 1 — PM2.5 Logger (Google Sheets)
 - `log_pm25.py` บันทึก PM2.5, temp, humidity ลง Google Sheets

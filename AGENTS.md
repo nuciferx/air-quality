@@ -28,6 +28,14 @@
 
 ## 3. Device Configuration (สำคัญ)
 
+### Host Routing
+
+| Host key | Base URL |
+|----------|----------|
+| `sg` | `https://sg.api.io.mi.com` |
+| `us` | `https://us.api.io.mi.com` |
+| `cn` | `https://api.io.mi.com` |
+
 ### siid/piid Mapping — ห้ามเปลี่ยนถ้าไม่ได้ verify จริง
 
 | Device | ID | Model | Host | DID | PM2.5 | Mode | Power | Hum | Temp | Filter | Buzz | Lock |
@@ -44,6 +52,22 @@
 3. `DEVICE_PROP_SPECS` — `webapp/frontend/lib/api.ts`
 4. `DEVICE_MODES` — `webapp/frontend/components/DeviceCard.tsx`
 5. `ROOM_THRESHOLDS` — `webapp/worker/src/index.ts`
+
+### Vacuum devices แยกจาก 5-point rule
+
+หุ่นยนต์ดูดฝุ่น (`VACUUMS` registry ใน `webapp/worker/src/index.ts`) **ไม่เข้า** กฎ 5-point ข้างบน เพราะ:
+
+- ไม่มีใน `ROOM_THRESHOLDS` — ไม่มี auto-control
+- ไม่บันทึกลง D1 `readings` — ไม่มี historical logging
+- ไม่มีใน `DEVICE_MODES` / `DEVICE_PROP_SPECS` — ไม่ใช้ DeviceCard
+- ไม่นับใน deadman / scheduled report — ไม่รบกวน flow เครื่องฟอก
+- มี registry แยกต่างหาก: `VACUUMS` + `VACUUM_MAP` + `fetchVacuumProps()` + `invokeAction()`
+
+เมื่อเพิ่ม/แก้ไข vacuum ให้อัปเดต `VACUUMS` ใน `webapp/worker/src/index.ts` และ `webapp/frontend/lib/api.ts` (`Vacuum` interface) + `webapp/frontend/components/VacuumCard.tsx` เท่านั้น
+
+| Vacuum | ID | Model | Host | DID |
+|--------|----|-------|------|-----|
+| หุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro | s40pro | xiaomi.vacuum.ov71gl | us | 1191295215 |
 
 ### Mode Values
 
@@ -71,6 +95,8 @@
 | GET | `/api/history/stats?hours=24` | สถิติรายชั่วโมง | — |
 | GET | `/api/stream` | SSE (poll ทุก 30s) | — |
 | POST | `/api/control` | สั่งเปิด/ปิด/เปลี่ยน mode | — |
+| GET | `/api/vacuum` | สถานะหุ่นยนต์ดูดฝุ่นทุกตัว | — |
+| POST | `/api/vacuum/action` | สั่งงานหุ่นยนต์ดูดฝุ่น (did, action) | — |
 | POST | `/api/renew` | อัปเดต credentials ใน KV | LOG_SECRET |
 | POST | `/api/log` | บันทึก readings จากภายนอก | LOG_SECRET |
 | GET | `/api/creds` | สถานะ credentials | LOG_SECRET |

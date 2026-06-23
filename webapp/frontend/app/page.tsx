@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Device, fetchAllDevices, subscribeToStream } from "@/lib/api";
+import { Device, Vacuum, fetchAllDevices, getVacuums, subscribeToStream } from "@/lib/api";
 import DeviceCard from "@/components/DeviceCard";
+import VacuumCard from "@/components/VacuumCard";
 import { RefreshCw, Wifi, WifiOff } from "lucide-react";
 
 export default function DashboardPage() {
   const [devices, setDevices]     = useState<Device[]>([]);
+  const [vacuums, setVacuums]     = useState<Vacuum[]>([]);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
@@ -25,8 +27,18 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const loadVacuums = useCallback(async () => {
+    try {
+      const data = await getVacuums();
+      setVacuums(data);
+    } catch {
+      // vacuum errors don't block the main dashboard
+    }
+  }, []);
+
   useEffect(() => {
     loadDevices();
+    loadVacuums();
 
     const cleanup = subscribeToStream(
       (incoming) => {
@@ -39,7 +51,7 @@ export default function DashboardPage() {
     );
 
     return cleanup;
-  }, [loadDevices]);
+  }, [loadDevices, loadVacuums]);
 
   const onlineCount = devices.filter((d) => d.online).length;
 
@@ -97,6 +109,18 @@ export default function DashboardPage() {
           {devices.map((device) => (
             <DeviceCard key={device.id} device={device} onRefresh={loadDevices} />
           ))}
+        </div>
+      )}
+
+      {/* Vacuum section */}
+      {vacuums.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-lg font-semibold text-white">หุ่นยนต์ดูดฝุ่น</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {vacuums.map((v) => (
+              <VacuumCard key={v.id} vacuum={v} onRefresh={loadVacuums} />
+            ))}
+          </div>
         </div>
       )}
 

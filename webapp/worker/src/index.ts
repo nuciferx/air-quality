@@ -36,8 +36,22 @@ interface DeviceConfig {
   id: string;
   name: string;
   did: string;
-  host: "sg" | "cn";
+  host: "sg" | "cn" | "us";
   props: Record<string, PropSpec>;
+}
+
+interface ActionSpec {
+  siid: number;
+  aiid: number;
+}
+
+interface VacuumConfig {
+  id: string;
+  name: string;
+  did: string;
+  host: "sg" | "cn" | "us";
+  props: Record<string, PropSpec>;
+  actions: Record<string, ActionSpec>;
 }
 
 const DEVICES: DeviceConfig[] = [
@@ -113,11 +127,55 @@ const DEVICES: DeviceConfig[] = [
 
 const DEVICE_MAP = new Map<string, DeviceConfig>(DEVICES.map((d) => [d.id, d]));
 
+// ── Vacuum registry (separate from DEVICES — never enters D1 / auto-control) ──
+
+const VACUUMS: VacuumConfig[] = [
+  {
+    // xiaomi.vacuum.ov71gl — Xiaomi Robot Vacuum S40 Pro
+    id: "s40pro",
+    name: "หุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro",
+    did: "1191295215",
+    host: "us",
+    props: {
+      status:         { siid: 2, piid: 2  },  // uint8 1-24
+      clean_area:     { siid: 2, piid: 6  },  // m²
+      clean_time:     { siid: 2, piid: 7  },  // seconds
+      mode:           { siid: 2, piid: 9  },
+      battery:        { siid: 3, piid: 1  },  // %
+      charging:       { siid: 3, piid: 2  },  // 1=Charging 2=NotCharging 3=NotChargeable
+      mop_life:       { siid: 9, piid: 1  },  // %
+      main_brush_life: { siid: 12, piid: 1 }, // %
+      side_brush_life: { siid: 13, piid: 1 }, // %
+      filter_life:    { siid: 14, piid: 1 },  // %
+    },
+    actions: {
+      start_sweep:      { siid: 2, aiid: 1 },
+      stop:             { siid: 2, aiid: 2 },
+      stop_and_charge:  { siid: 2, aiid: 3 },
+      start_mop:        { siid: 2, aiid: 5 },
+      sweep_mop:        { siid: 2, aiid: 6 },
+      pause:            { siid: 2, aiid: 7 },
+      continue:         { siid: 2, aiid: 8 },
+      charge:           { siid: 3, aiid: 1 },
+    },
+  },
+];
+
+const VACUUM_MAP = new Map<string, VacuumConfig>(VACUUMS.map((v) => [v.did, v]));
+
 // ── URL helpers ───────────────────────────────────────────────────────────────
 
-function apiUrl(host: "sg" | "cn", path: "/app/miotspec/prop/get" | "/app/miotspec/prop/set"): string {
-  const base = host === "sg" ? "https://sg.api.io.mi.com" : "https://api.io.mi.com";
-  return `${base}${path}`;
+const HOST_BASE: Record<"sg" | "cn" | "us", string> = {
+  sg: "https://sg.api.io.mi.com",
+  us: "https://us.api.io.mi.com",
+  cn: "https://api.io.mi.com",
+};
+
+function apiUrl(
+  host: "sg" | "cn" | "us",
+  path: "/app/miotspec/prop/get" | "/app/miotspec/prop/set" | "/app/miotspec/action"
+): string {
+  return `${HOST_BASE[host] ?? HOST_BASE.cn}${path}`;
 }
 
 // ── Base64 helpers (Web Crypto compatible) ────────────────────────────────────
@@ -439,6 +497,51 @@ async function fetchOneDevice(device: DeviceConfig, creds: XiaomiCreds) {
   };
 }
 
+// ── Vacuum helpers ────────────────────────────────────────────────────────────
+
+async function fetchVacuumProps(
+  vacuum: VacuumConfig,
+  creds: XiaomiCreds
+): Promise<Record<string, unknown>> {
+  const url = apiUrl(vacuum.host, "/app/miotspec/prop/get");
+  const propList = Object.values(vacuum.props).map((spec) => ({
+    did: vacuum.did,
+    siid: spec.siid,
+    piid: spec.piid,
+  }));
+
+  const dataJson = JSON.stringify({ params: propList });
+  const result = (await xiaomiRequest(url, dataJson, creds)) as {
+    result?: PropResult[];
+  };
+
+  const values: Record<string, unknown> = {};
+  for (const [label, spec] of Object.entries(vacuum.props)) {
+    const item = result.result?.find(
+      (r) => r.siid === spec.siid && r.piid === spec.piid
+    );
+    if (item && item.code === 0) {
+      values[label] = item.value;
+    }
+  }
+  return values;
+}
+
+async function invokeAction(
+  vacuum: VacuumConfig,
+  actionKey: string,
+  inParams: unknown[] | undefined,
+  creds: XiaomiCreds
+): Promise<unknown> {
+  const spec = vacuum.actions[actionKey];
+  if (!spec) throw new Error(`Unknown action: ${actionKey}`);
+  const url = apiUrl(vacuum.host, "/app/miotspec/action");
+  const dataJson = JSON.stringify({
+    params: { did: vacuum.did, siid: spec.siid, aiid: spec.aiid, in: inParams ?? [] },
+  });
+  return xiaomiRequest(url, dataJson, creds);
+}
+
 // ── CORS headers ──────────────────────────────────────────────────────────────
 
 function corsHeaders(origin: string | null): HeadersInit {
@@ -503,7 +606,7 @@ interface DeviceRuntime {
   id: string;
   name: string;
   did: string;
-  host: "sg" | "cn";
+  host: "sg" | "cn" | "us";
   online: boolean;
   values: Record<string, unknown>;
   fetched_at: number;
@@ -736,7 +839,9 @@ async function controlDeviceMode(
     const powerSpec = device.props["power"];
     const url = apiUrl(device.host, "/app/miotspec/prop/set");
 
-    const params = [{ did: device.did, siid: powerSpec.siid, piid: powerSpec.piid, value: power }];
+    const params: { did: string; siid: number; piid: number; value: boolean | number }[] = [
+      { did: device.did, siid: powerSpec.siid, piid: powerSpec.piid, value: power },
+    ];
     if (power && modeSpec) {
       params.push({ did: device.did, siid: modeSpec.siid, piid: modeSpec.piid, value: mode });
     }
@@ -1228,9 +1333,11 @@ export default {
       }
 
       // Derive the host enum from the full hostname or short key
-      let hostEnum: "sg" | "cn";
+      let hostEnum: "sg" | "cn" | "us";
       if (host === "sg" || host.startsWith("sg.")) {
         hostEnum = "sg";
+      } else if (host === "us" || host.startsWith("us.")) {
+        hostEnum = "us";
       } else {
         hostEnum = "cn";
       }
@@ -1242,6 +1349,64 @@ export default {
       try {
         const result = await withWorkingCreds(env, (creds) =>
           xiaomiRequest(controlUrl, dataJson, creds)
+        );
+        return jsonResponse({ ok: true, result }, 200, origin);
+      } catch (err) {
+        return errorResponse(String(err), 502, origin);
+      }
+    }
+
+    // GET /api/vacuum — fetch all vacuum statuses
+    if (request.method === "GET" && path === "/api/vacuum") {
+      try {
+        const results = await Promise.allSettled(
+          VACUUMS.map((v) =>
+            withWorkingCreds(env, (creds) => fetchVacuumProps(v, creds))
+          )
+        );
+        const vacuums = results.map((r, i) => {
+          const v = VACUUMS[i];
+          return {
+            id: v.id,
+            name: v.name,
+            did: v.did,
+            host: v.host,
+            online: r.status === "fulfilled",
+            values: r.status === "fulfilled" ? r.value : {},
+          };
+        });
+        return jsonResponse({ vacuums }, 200, origin);
+      } catch (err) {
+        return errorResponse(String(err), 502, origin);
+      }
+    }
+
+    // POST /api/vacuum/action — invoke an action on a vacuum
+    if (request.method === "POST" && path === "/api/vacuum/action") {
+      let body: { did?: string; action?: string; in?: unknown[] };
+      try {
+        body = await request.json();
+      } catch {
+        return errorResponse("Invalid JSON body", 400, origin);
+      }
+
+      const { did, action } = body;
+      if (!did || !action) {
+        return errorResponse("Missing required fields: did, action", 400, origin);
+      }
+
+      const vacuum = VACUUM_MAP.get(did);
+      if (!vacuum) {
+        return errorResponse(`Unknown vacuum did: ${did}`, 404, origin);
+      }
+
+      if (!vacuum.actions[action]) {
+        return errorResponse(`Unknown action: ${action}`, 400, origin);
+      }
+
+      try {
+        const result = await withWorkingCreds(env, (creds) =>
+          invokeAction(vacuum, action, body.in, creds)
         );
         return jsonResponse({ ok: true, result }, 200, origin);
       } catch (err) {

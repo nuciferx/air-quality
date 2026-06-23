@@ -456,6 +456,62 @@ async function handleTokenStatus(env: Env): Promise<string> {
     `คาดว่าเหลือก่อนหมดอายุ: ${status.estimatedDaysLeft ?? "—"} วัน`;
 }
 
+function vacuumStatusLabel(status: number): string {
+  switch (status) {
+    case 1: return "ว่าง";
+    case 2: return "กำลังชาร์จ";
+    case 4: return "กำลังกวาด";
+    case 5: return "หยุดชั่วคราว";
+    case 9: return "ชาร์จเต็ม";
+    case 15: return "Error";
+    case 16: return "กวาด+ถู";
+    case 17: return "กำลังถู";
+    default: return `สถานะ ${status}`;
+  }
+}
+
+async function handleVacuum(env: Env): Promise<string> {
+  let data: { vacuums?: { id: string; name: string; did: string; host: string; online: boolean; values: { status?: number; battery?: number; charging?: boolean; clean_area?: number; clean_time?: number; mode?: number; mop_life?: number; main_brush_life?: number; side_brush_life?: number; filter_life?: number } }[] };
+  try {
+    const res = await apiGet(env, "/api/vacuum");
+    if (!res.ok) return `⚠️ ดึงข้อมูลหุ่นยนต์ดูดฝุ่นไม่สำเร็จ (HTTP ${res.status})`;
+    data = await res.json();
+  } catch (err) {
+    return `⚠️ เกิดข้อผิดพลาดขณะดึงข้อมูลหุ่นยนต์: ${String(err)}`;
+  }
+
+  const vacuums = data.vacuums || [];
+  if (vacuums.length === 0) return "⚠️ ไม่พบข้อมูลหุ่นยนต์ดูดฝุ่น";
+
+  let msg = `🤖 <b>สถานะหุ่นยนต์ดูดฝุ่น</b>\n`;
+  msg += `🕐 ${new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" })}\n\n`;
+
+  for (const v of vacuums) {
+    const vals = v.values;
+    msg += `<b>${v.name}</b> ${v.online ? "✅ ออนไลน์" : "❌ ออฟไลน์"}\n`;
+    if (vals.status !== undefined) msg += `  สถานะ: ${vacuumStatusLabel(vals.status)}\n`;
+    if (vals.battery !== undefined) {
+      msg += `  แบตเตอรี่: ${vals.battery}%`;
+      if (vals.charging !== undefined) msg += vals.charging ? " ⚡ กำลังชาร์จ" : "";
+      msg += `\n`;
+    }
+    if (vals.clean_area !== undefined || vals.clean_time !== undefined) {
+      const areaSqm = vals.clean_area !== undefined ? (vals.clean_area / 1000000).toFixed(1) : "—";
+      const timeMin = vals.clean_time !== undefined ? vals.clean_time : "—";
+      msg += `  รอบล่าสุด: ${areaSqm} ม² | ${timeMin} นาที\n`;
+    }
+    const lifeParts: string[] = [];
+    if (vals.main_brush_life !== undefined) lifeParts.push(`แปรงหลัก ${vals.main_brush_life}%`);
+    if (vals.side_brush_life !== undefined) lifeParts.push(`แปรงข้าง ${vals.side_brush_life}%`);
+    if (vals.filter_life !== undefined) lifeParts.push(`ไส้กรอง ${vals.filter_life}%`);
+    if (vals.mop_life !== undefined) lifeParts.push(`ผ้าถู ${vals.mop_life}%`);
+    if (lifeParts.length > 0) msg += `  อายุใช้งาน: ${lifeParts.join(" | ")}\n`;
+    msg += "\n";
+  }
+
+  return msg;
+}
+
 async function handleRenew(env: Env, chatId: number): Promise<string> {
   const cooldownKey = `bot:renew:cooldown:${chatId}`;
   if (await env.BOT_KV.get(cooldownKey)) return "⏳ cooldown — ลองอีกครั้งใน ~10 นาที";
@@ -519,6 +575,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 /predict — ทำนาย PM2.5 + Filter
 /on [room] — เปิดเครื่อง (4lite, maxpro, maxdown, cat)
 /off [room] — ปิดเครื่อง
+/vacuum — สถานะหุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro
 /weather — สภาพอากาศตำแหน่งล่าสุด
 /weather_home — สภาพอากาศที่บ้าน
 /token — สถานะโทเคน Xiaomi
@@ -542,6 +599,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     response = await handleWeatherLatest(env, chatId);
   } else if (text === "/weather_home") {
     response = await handleWeatherHome();
+  } else if (text === "/vacuum") {
+    response = await handleVacuum(env);
   } else if (text === "/token") {
     response = await handleTokenStatus(env);
   } else if (text === "/renew") {
@@ -596,7 +655,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(JSON.stringify({
         bot: "Air Quality Bot",
-        commands: ["/status", "/predict", "/on", "/off", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
+        commands: ["/status", "/predict", "/on", "/off", "/vacuum", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
       }), { headers: { "Content-Type": "application/json" } });
     }
 

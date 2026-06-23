@@ -188,6 +188,47 @@ export function pm25BgClass(value: number | undefined): string {
   return "bg-red-500";
 }
 
+// ── Vacuum ────────────────────────────────────────────────────────────────────
+
+export interface VacuumValues {
+  status?: number;
+  clean_area?: number;
+  clean_time?: number;
+  mode?: number;
+  battery?: number;
+  charging?: number;
+  mop_life?: number;
+  main_brush_life?: number;
+  side_brush_life?: number;
+  filter_life?: number;
+}
+
+export interface Vacuum {
+  id: string;
+  name: string;
+  did: string;
+  host: string;
+  online: boolean;
+  values: VacuumValues;
+}
+
+export async function getVacuums(): Promise<Vacuum[]> {
+  const data = await apiFetch<{ vacuums: Vacuum[] }>("/api/vacuum");
+  return data.vacuums;
+}
+
+export async function sendVacuumAction(
+  did: string,
+  action: string,
+  inParams?: unknown[]
+): Promise<{ ok: boolean; result?: unknown }> {
+  return apiFetch<{ ok: boolean; result?: unknown }>("/api/vacuum/action", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ did, action, in: inParams }),
+  });
+}
+
 // ── Device prop specs (mirrors backend DEVICES) ───────────────────────────────
 
 export const DEVICE_PROP_SPECS: Record<
