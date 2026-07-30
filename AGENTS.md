@@ -186,11 +186,25 @@ Authorization: Bearer <LOG_SECRET>
 | `/predict` | ทำนาย PM2.5 trend + filter |
 | `/on [room]` | เปิดเครื่อง (room: 4lite, maxpro, maxdown, cat) |
 | `/off [room]` | ปิดเครื่อง |
+| `/vacuum` | สถานะหุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro |
 | `/weather` | สภาพอากาศตำแหน่งล่าสุด |
 | `/weather_home` | สภาพอากาศที่บ้าน |
 | `/token` | สถานะโทเคน Xiaomi |
+| `/renew` | หมุนโทเคน Xiaomi (cooldown 10 นาที) |
 | `/ai [ข้อความ]` | ถาม Qwen AI วิเคราะห์อากาศ |
-| `/help` | แสดงคำสั่ง |
+| `/menu`, `/help`, `/start` | แสดงเมนูคำสั่งทั้งหมด |
+
+### Command menu — single source of truth
+`COMMANDS` ใน `telegram-bot/src/index.ts` เป็นต้นทางเดียวของรายการคำสั่ง ใช้ซ้ำ 3 ที่:
+เมนู `/` ของ Telegram (`setMyCommands`), ข้อความ `/menu` `/help` `/start`, และ JSON ที่ `GET /` ตอบ
+รายชื่อห้องใน `/menu` derive มาจาก `DEVICE_INFO` ไม่ได้ hard-code ซ้ำ
+
+เพิ่ม/แก้คำสั่งแล้วต้องทำ 2 ขั้น:
+```bash
+cd telegram-bot && npx wrangler deploy
+curl https://air-quality-bot.ideaplanstudio.workers.dev/set-commands   # ลงทะเบียนเมนู "/" ใหม่
+```
+ข้ามขั้นที่ 2 = คำสั่งใช้งานได้ แต่เมนู `/` ใน Telegram ยังเป็นของเดิม (Telegram cache ฝั่ง server)
 
 ### AI Config
 - Model: `qwen-turbo` (DashScope API)

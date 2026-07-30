@@ -53,6 +53,73 @@ const HOME_LOCATION = {
   label: "บ้าน",
 };
 
+// ── Device info mapping ───────────────────────────────────────────────────────
+// จุดที่ 3 ของกฎ device-sync 5 จุด (ดู CLAUDE.md) — แก้ที่นี่ต้องแก้อีก 4 ที่ด้วย
+
+const DEVICE_INFO: Record<string, { did: string; host: string; label: string }> = {
+  "4lite": { did: "873639853", host: "sg", label: "ห้องทำงาน" },
+  "maxpro": { did: "460764069", host: "cn", label: "ห้องนอนชั้น 2" },
+  "maxdown": { did: "131590393", host: "cn", label: "โถงชั้นล่าง" },
+  "cat": { did: "357231085", host: "cn", label: "ห้องแมวชั้น 2" },
+};
+
+const ROOM_IDS = Object.keys(DEVICE_INFO);
+
+// ── Command menu (single source of truth) ─────────────────────────────────────
+// ใช้ที่เดียว 3 ที่: เมนู "/" ของ Telegram (setMyCommands), ข้อความ /help,
+// และ JSON ที่ GET / ตอบกลับ — เพิ่มคำสั่งใหม่ให้แก้ที่นี่จุดเดียว
+//
+//   command — ไม่ต้องมี "/" (ข้อกำหนด setMyCommands: a-z, 0-9, _ เท่านั้น)
+//   args    — คำใบ้พารามิเตอร์ แสดงใน /help (เมนู Telegram ไม่รองรับ)
+//   desc    — คำอธิบายสั้น ๆ (setMyCommands จำกัด 256 ตัวอักษร)
+
+interface BotCommand {
+  command: string;
+  args?: string;
+  desc: string;
+}
+
+const COMMANDS: BotCommand[] = [
+  { command: "status", desc: "ดูสถานะทุกห้อง" },
+  { command: "predict", desc: "ทำนาย PM2.5 + Filter" },
+  { command: "on", args: "[room]", desc: `เปิดเครื่อง (${ROOM_IDS.join(", ")})` },
+  { command: "off", args: "[room]", desc: "ปิดเครื่อง" },
+  { command: "vacuum", desc: "สถานะหุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro" },
+  { command: "weather", desc: "สภาพอากาศตำแหน่งล่าสุด" },
+  { command: "weather_home", desc: "สภาพอากาศที่บ้าน" },
+  { command: "token", desc: "สถานะโทเคน Xiaomi" },
+  { command: "renew", desc: "หมุนโทเคน Xiaomi (cooldown 10 นาที)" },
+  { command: "ai", args: "[ข้อความ]", desc: "ถาม AI เกี่ยวกับคุณภาพอากาศ" },
+  { command: "menu", desc: "แสดงเมนูคำสั่งทั้งหมด" },
+  { command: "help", desc: "แสดงเมนูคำสั่งทั้งหมด" },
+];
+
+function buildMenuMessage(): string {
+  const commandLines = COMMANDS
+    .map((c) => `/${c.command}${c.args ? ` ${c.args}` : ""} — ${c.desc}`)
+    .join("\n");
+  const roomLines = ROOM_IDS.map((id) => `• ${id} — ${DEVICE_INFO[id].label}`).join("\n");
+
+  return `🤖 <b>Air Quality Bot</b>
+
+<b>คำสั่ง:</b>
+${commandLines}
+
+<b>ห้อง:</b>
+${roomLines}
+
+<b>ตำแหน่ง:</b>
+ส่ง location มาในแช็ต แล้วใช้ /weather ได้`;
+}
+
+// ลงทะเบียนเมนู "/" ของ Telegram — เรียกผ่าน GET /set-commands หลัง deploy
+async function registerCommandMenu(token: string): Promise<unknown> {
+  const res = await telegramRequest(token, "setMyCommands", {
+    commands: COMMANDS.map((c) => ({ command: c.command, description: c.desc })),
+  });
+  return res.json();
+}
+
 // ── Telegram API helpers ──────────────────────────────────────────────────────
 
 async function telegramRequest(token: string, method: string, body: Record<string, unknown>): Promise<Response> {
@@ -173,14 +240,6 @@ async function askQwen(env: Env, prompt: string, context: string): Promise<strin
   return data.choices?.[0]?.message?.content?.trim() || "ไม่ได้รับคำตอบจาก AI";
 }
 
-// ── Device info mapping ───────────────────────────────────────────────────────
-
-const DEVICE_INFO: Record<string, { did: string; host: string }> = {
-  "4lite": { did: "873639853", host: "sg" },
-  "maxpro": { did: "460764069", host: "cn" },
-  "maxdown": { did: "131590393", host: "cn" },
-  "cat": { did: "357231085", host: "cn" },
-};
 
 function pm25Label(value: number | undefined): string {
   if (value === undefined || value === null) return "N/A";
@@ -567,30 +626,8 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       response = `📍 บันทึกตำแหน่งล่าสุดแล้ว\n${label}\nพิมพ์ /weather เพื่อดูสภาพอากาศจุดนี้`;
     } else if (!text) {
       return new Response("OK");
-    } else if (text === "/start" || text === "/help") {
-    response = `🤖 <b>Air Quality Bot</b>
-
-<b>คำสั่ง:</b>
-/status — ดูสถานะทุกห้อง
-/predict — ทำนาย PM2.5 + Filter
-/on [room] — เปิดเครื่อง (4lite, maxpro, maxdown, cat)
-/off [room] — ปิดเครื่อง
-/vacuum — สถานะหุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro
-/weather — สภาพอากาศตำแหน่งล่าสุด
-/weather_home — สภาพอากาศที่บ้าน
-/token — สถานะโทเคน Xiaomi
-/renew — หมุนโทเคน Xiaomi (cooldown 10 นาที)
-/ai [ข้อความ] — ถาม AI เกี่ยวกับคุณภาพอากาศ
-/help — แสดงคำสั่งนี้
-
-<b>ห้อง:</b>
-• 4lite — ห้องทำงาน
-• maxpro — ห้องนอนชั้น 2
-• maxdown — โถงชั้นล่าง
-• cat — ห้องแมวชั้น 2
-
-<b>ตำแหน่ง:</b>
-ส่ง location มาในแช็ต แล้วใช้ /weather ได้`;
+    } else if (text === "/start" || text === "/help" || text === "/menu") {
+    response = buildMenuMessage();
   } else if (text === "/status") {
     response = await handleStatus(env, chatId);
   } else if (text === "/predict") {
@@ -651,11 +688,18 @@ export default {
       return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
     }
 
+    // GET /set-commands — ลงทะเบียนเมนู "/" ของ Telegram จาก COMMANDS
+    // ต้องเรียกครั้งเดียวหลัง deploy ทุกครั้งที่แก้ COMMANDS
+    if (request.method === "GET" && url.pathname === "/set-commands") {
+      const data = await registerCommandMenu(env.TELEGRAM_BOT_TOKEN);
+      return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+    }
+
     // GET / — Bot info
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(JSON.stringify({
         bot: "Air Quality Bot",
-        commands: ["/status", "/predict", "/on", "/off", "/vacuum", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
+        commands: COMMANDS.map((c) => `/${c.command}`),
       }), { headers: { "Content-Type": "application/json" } });
     }
 

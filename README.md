@@ -227,10 +227,13 @@ auto-renew/renew_token_passtoken.py → script หลัก
 | `/predict` | ทำนาย PM2.5 trend + วันเปลี่ยน filter |
 | `/on [room]` | เปิดเครื่อง |
 | `/off [room]` | ปิดเครื่อง |
+| `/vacuum` | สถานะหุ่นยนต์ดูดฝุ่น Xiaomi S40 Pro |
 | `/weather_home` | ดูสภาพอากาศที่บ้าน |
 | `/weather` | ดูสภาพอากาศจากตำแหน่งล่าสุดที่ส่งให้บอท |
 | `/token` | ดูสถานะ token Xiaomi และอายุ token |
+| `/renew` | หมุนโทเคน Xiaomi (cooldown 10 นาที) |
 | `/ai [ข้อความ]` | ถาม Qwen AI วิเคราะห์อากาศ |
+| `/menu` | แสดงเมนูคำสั่งทั้งหมด (เหมือน `/help`, `/start`) |
 
 Room IDs: `4lite`, `maxpro`, `maxdown`, `cat`
 

@@ -49,7 +49,8 @@ grep -E 'binding|service|name' telegram-bot/wrangler.toml | head -10
 
 ## Shape
 - Entry: telegram-bot/src/index.ts (<N> lines)
-- Commands wired: /status /predict /on /off /weather /weather_home /token /ai /help
+- Commands wired: /status /predict /on /off /vacuum /weather /weather_home /token /renew /ai /menu /help
+  (canonical list = `COMMANDS` array in `telegram-bot/src/index.ts`; `GET /` echoes it)
 - Service binding to API: AIR_QUALITY_API ✓
 - AI: DashScope (Qwen) via DASHSCOPE_API_KEY
 - ALLOWED_CHAT_ID gate: ✓ on writes
