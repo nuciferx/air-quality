@@ -12,7 +12,7 @@ Xiaomi Cloud API
 Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
       ↓                     ↓
   D1 Database          Auto-Control
-  (readings)           (PM2.5 >= 35 → เปิดแรงสุด)
+  (readings)           (PM2.5 > 40 → Favorite เฉพาะห้องนั้น)
       ↓                     ↓
   Frontend          Telegram Alert
   (Next.js)
@@ -43,10 +43,30 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 - ไม่แตะ worker — ใช้ `POST /api/control` เดิมผ่าน service binding
 - ปุ่ม Menu สีน้ำเงินในแช็ต: `BOT_COMMANDS` + endpoint `GET /set-commands` (เรียก `setMyCommands` scope = chat ของ `ALLOWED_CHAT_ID`) — ยิงซ้ำทุกครั้งที่เพิ่ม/แก้คำสั่ง
 - `/on` / `/off` แบบไม่ใส่ห้อง → เปิดเมนูปุ่มกดแทน error
-- กด **Favorite** = ฟอกแรงสุด — ตั้ง mode=2 แล้วดันพัดลมขึ้น `fanMax` ให้อัตโนมัติในรุ่นที่สั่งระดับพัดลมได้ (ตอนนี้มีแต่ `4lite`, fanMax=14)
+- กด **Favorite** = ฟอกแรงสุด — ตั้ง mode=2 แล้วดันพัดลมขึ้น `fanMax` ให้อัตโนมัติในรุ่นที่สั่งระดับพัดลมได้ (`4lite` fanMax=14, `maxpro` fanMax=9)
 - ปุ่ม **🌪 ฟอกทั้งบ้าน** บนเมนูหลัก — ปุ่มเดียว: เปิด 4 เครื่อง + Favorite + พัดลมแรงสุด ยิง sequential แล้วรายงานผลรายห้อง (ตอบ callback ก่อนเริ่มกัน `query is too old`)
 - worker: เพิ่ม prop `fan { siid: 9, piid: 11 }` ให้ `4lite` ใน `DEVICES` — เดิม `/api/devices` ไม่เคยคืนค่าพัดลม ทำให้ทั้ง slider บนเว็บและปุ่มในบอทไม่รู้ค่าปัจจุบัน
-- ⚠️ `maxpro` / `maxdown` / `cat` ยังไม่มี prop ระดับพัดลมที่ verify แล้ว — Favorite จึงใช้ระดับที่เครื่องจำไว้ ถ้าต้องการลมแรงสุดแบบชัวร์ให้เลือก `L3` (maxpro/maxdown)
+
+### Fix 2026-08-01 (4) — filter_pct/mode ไม่เคยถูกบันทึก + โหมดที่เครื่องไม่รับ
+ทดสอบกับเครื่องจริง (สั่งแล้วอ่านค่ากลับ แล้วคืนค่าเดิม) — เจอ 4 เรื่อง:
+
+1. **`mode` และ `filter_pct` ไม่เคยถูกเขียนลง D1** — ตาราง production มีคอลัมน์ทั้งคู่
+   (ถูกเพิ่มไว้ก่อน) แต่ `INSERT` ทั้ง 2 จุด (cron + `/api/log`) ไม่มีคอลัมน์นี้ และ
+   `schema.sql` ก็ไม่มี → `/api/history/stats` คืน `filter_pct: null` เสมอ ทำให้
+   **การทำนายวันเปลี่ยนไส้กรองใน `/predict` ตายมาตั้งแต่แรก** — แก้ INSERT + schema แล้ว
+2. **`maxpro` มีระดับพัดลม Favorite จริง** (`siid 9 / piid 1`, 0–9) — อ่านค่าได้ `9`
+   → ปุ่มฟอกทั้งบ้านสั่งแรงสุดได้ 2 เครื่องแล้ว (`4lite` + `maxpro`)
+3. **`maxdown` (sb1) ไม่มี** prop นั้น (`9/1` อ่านไม่ขึ้น) และ `2/2` **รับแค่ 0–2** —
+   สั่ง `5` ได้ `code -704220043` แปลว่าปุ่ม **L1/L2/L3 ของ maxdown ตายมาตลอด** ตัดออกแล้ว
+   เช่นเดียวกับปุ่ม **Fan (mode=3) ของ 4lite** ที่ถูกปฏิเสธด้วย code เดียวกัน
+   (`maxpro` รับ `5` ได้ code 0 → L1–L3 ของตัวนี้ใช้ได้จริง เก็บไว้)
+4. **`POST /api/control` รายงานผลผิด** — Xiaomi ตอบ `code:0` ที่ชั้นนอกเสมอ แม้เครื่อง
+   จะปฏิเสธค่า ต้องดู `result[0].code` → เดิมบอท/เว็บขึ้น "✅ สำเร็จ" ทั้งที่ไม่มีอะไรเกิดขึ้น
+   ตอนนี้คืน 502 พร้อม code จริงแทน
+
+หมายเหตุที่ยังไม่ฟันธง: spec ของ sb1 บอกว่า `2/2` คือ fan-level (Low/Med/High) ส่วน mode
+จริงอยู่ `2/3` (อ่านได้ค่า `3`) — ป้ายปุ่ม Auto/Sleep/Fav ของ maxdown จึงอาจไม่ตรงความหมาย
+แต่พฤติกรรมยังถูก (2 = ลมแรงสุดที่รุ่นนี้ทำได้) เลยยังไม่แก้ semantics
 
 ### Sprint 2026-08-01 (3) — อ่านสมาร์ทซีน Mi Home (`GET /api/scenes`)
 ก่อนหน้านี้ระบบไม่รู้เลยว่ามีอะไรตั้งเวลาไว้ในแอป Mi Home — ซีนพวกนั้นสั่งเครื่องได้
@@ -163,7 +183,7 @@ Worker cron ทุก 5 นาที ตรวจสอบ PM2.5 และคว
 
 | ระดับ | PM2.5 | Action |
 |-------|-------|--------|
-| 🔴 อันตราย | ≥ 35 µg/m³ | เปิดทุกเครื่อง Favorite mode (แรงสุด) + Telegram alert |
+| 🔴 อันตราย | > 40 µg/m³ | เปิด **เฉพาะห้องนั้น** + Favorite + Telegram alert (กลับ Auto เมื่อ ≤ 10) |
 | 🟢 ปลอดภัย | < 15 µg/m³ | กลับ Auto mode + Telegram clear |
 
 ใช้ KV key `auto_control_active` เก็บ state เพื่อไม่ส่งคำสั่งซ้ำ
@@ -273,7 +293,7 @@ air-quality/
 
 | Feature | สถานะ | คำอธิบาย |
 |---------|-------|---------|
-| Auto-Control PM2.5 | ✅ เสร็จ | เปิดแรงสุดเมื่อฝุ่นเกิน 35 |
+| Auto-Control PM2.5 | ✅ เสร็จ | เปิด Favorite เฉพาะห้องที่ฝุ่นเกิน 40 |
 | Alert Telegram | ✅ เสร็จ (รวมอยู่ใน auto-control) | แจ้งเมื่อฝุ่นเกิน/ลด |
 | Morning Report | 🔲 ยังไม่ทำ | สรุปอากาศทุกเช้า 08:00 |
 | Outdoor vs Indoor | 🔲 ยังไม่ทำ | เทียบฝุ่นนอก/ในบ้าน (AQICN API) |

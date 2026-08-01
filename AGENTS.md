@@ -41,9 +41,21 @@
 | Device | ID | Model | Host | DID | PM2.5 | Mode | Power | Hum | Temp | Filter | Buzz | Lock | Fan (favorite) |
 |--------|----|-------|------|-----|-------|------|-------|-----|------|--------|------|------|-----|
 | ห้องทำงาน | 4lite | rmb1 | sg | 873639853 | siid=3,piid=4 | siid=2,piid=4 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=7 | siid=4,piid=1 | siid=6,piid=1 | siid=8,piid=1 | siid=9,piid=11 (1–14) |
-| ห้องนอนชั้น2 | maxpro | sa2 | cn | 460764069 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 | — (ยังไม่ verify) |
-| โถงชั้นล่าง | maxdown | sb1 | cn | 131590393 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 | — (ยังไม่ verify) |
-| ห้องแมวชั้น2 | cat | v7 | cn | 357231085 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=6,piid=1 | siid=5,piid=1 | — (ยังไม่ verify) |
+| ห้องนอนชั้น2 | maxpro | sa2 | cn | 460764069 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 | siid=9,piid=1 (0–9) |
+| โถงชั้นล่าง | maxdown | sb1 | cn | 131590393 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 | — (รุ่นนี้ไม่มี) |
+| ห้องแมวชั้น2 | cat | v7 | cn | 357231085 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=6,piid=1 | siid=5,piid=1 | — (รุ่นนี้ไม่มี) |
+
+**ค่า mode ที่เครื่องรับจริง (verified 2026-08-01 — สั่งจริงแล้วอ่านกลับ):**
+
+| Device | รับค่า | ไม่รับ |
+|---|---|---|
+| 4lite | 0 Auto · 1 Sleep · 2 Favorite | **3 (Fan) → code -704220043** |
+| maxpro | 0–5 (Auto/Sleep/Fav/L1/L2/L3) | — |
+| maxdown | 0 · 1 · 2 | **3–5 (L1–L3) → code -704220043** |
+| cat | 0 · 1 · 2 | — |
+
+⚠️ Xiaomi ตอบ `code:0` ที่ชั้นนอกเสมอแม้เครื่องปฏิเสธค่า — ต้องดู `result[0].code`
+(`/api/control` เช็กให้แล้ว คืน 502 เมื่อ code ≠ 0)
 
 ### เพิ่ม/เปลี่ยน Device ต้องอัปเดต 5 จุด
 

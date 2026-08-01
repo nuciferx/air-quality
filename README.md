@@ -111,7 +111,10 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 | GET | `/api/device/:id` | ข้อมูลเครื่องเดียว |
 | GET | `/api/history?hours=24&device=all` | ประวัติจาก D1 |
 | GET | `/api/history/stats?hours=24` | สถิติรายชั่วโมง |
-| POST | `/api/control` | สั่งเปิด/ปิด/เปลี่ยน mode |
+| GET | `/api/stream` | SSE — อัปเดตทุก 30 วินาที |
+| POST | `/api/control` | สั่งเปิด/ปิด/เปลี่ยน mode (คืน 502 ถ้าเครื่องปฏิเสธค่า) |
+| POST | `/api/log` | บันทึก readings จากภายนอก (ต้อง `LOG_SECRET`) |
+| GET | `/api/scenes` | สมาร์ทซีน/ตั้งเวลาในแอป Mi Home (ต้อง `LOG_SECRET`) |
 | GET | `/api/vacuum` | สถานะหุ่นยนต์ดูดฝุ่นทุกตัว |
 | POST | `/api/vacuum/action` | สั่งงานหุ่นยนต์ดูดฝุ่น (did, action) |
 | POST | `/api/renew` | อัปเดต credentials ใน KV |

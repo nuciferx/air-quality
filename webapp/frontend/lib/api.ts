@@ -254,6 +254,7 @@ export const DEVICE_PROP_SPECS: Record<
       mode:   { siid: 2, piid: 2 },
       buzz:   { siid: 7, piid: 1 },
       lock:   { siid: 8, piid: 1 },
+      fan:    { siid: 9, piid: 1 },  // favorite fan level 0–9 (verified 2026-08-01)
     },
   },
   maxdown: {

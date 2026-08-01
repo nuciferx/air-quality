@@ -277,11 +277,11 @@ const DEVICE_INFO: Record<string, PurifierSpec> = {
       buzz:  { siid: 6, piid: 1 },
       lock:  { siid: 8, piid: 1 },
     },
+    // verified 2026-08-01: mode=3 (Fan) ถูกเครื่องปฏิเสธ (code -704220043) — ตัดออก
     modes: [
       { label: "Auto", value: 0 },
       { label: "Sleep", value: 1 },
       { label: "Favorite", value: 2 },
-      { label: "Fan", value: 3 },
     ],
     fanMax: 14,
   },
@@ -294,6 +294,7 @@ const DEVICE_INFO: Record<string, PurifierSpec> = {
       mode:  { siid: 2, piid: 2 },
       buzz:  { siid: 7, piid: 1 },
       lock:  { siid: 8, piid: 1 },
+      fan:   { siid: 9, piid: 1 },  // favorite fan level 0–9 (verified 2026-08-01)
     },
     modes: [
       { label: "Auto", value: 0 },
@@ -303,6 +304,7 @@ const DEVICE_INFO: Record<string, PurifierSpec> = {
       { label: "L2", value: 4 },
       { label: "L3", value: 5 },
     ],
+    fanMax: 9,
   },
   "maxdown": {
     did: "131590393",
@@ -314,13 +316,11 @@ const DEVICE_INFO: Record<string, PurifierSpec> = {
       buzz:  { siid: 7, piid: 1 },
       lock:  { siid: 8, piid: 1 },
     },
+    // verified 2026-08-01: sb1 รับแค่ 0–2 (สั่ง 5 ได้ code -704220043) — L1/L2/L3 ตัดออก
     modes: [
       { label: "Auto", value: 0 },
       { label: "Sleep", value: 1 },
       { label: "Fav", value: 2 },
-      { label: "L1", value: 3 },
-      { label: "L2", value: 4 },
-      { label: "L3", value: 5 },
     ],
   },
   "cat": {

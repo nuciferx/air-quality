@@ -88,6 +88,7 @@ const DEVICES: DeviceConfig[] = [
       filter: { siid: 4, piid: 1  },  // % remaining
       buzz:   { siid: 7, piid: 1  },  // bool
       lock:   { siid: 8, piid: 1  },  // bool
+      fan:    { siid: 9, piid: 1  },  // 0–9 favorite fan level (verified 2026-08-01: อ่านค่าได้จริง)
     },
   },
   {
@@ -105,6 +106,7 @@ const DEVICES: DeviceConfig[] = [
       filter: { siid: 4, piid: 1  },
       buzz:   { siid: 7, piid: 1  },
       lock:   { siid: 8, piid: 1  },
+      // sb1 ไม่มี favorite fan level (9/1 อ่านไม่ขึ้น) และ 2/2 รับแค่ 0–2 (verified 2026-08-01)
     },
   },
   {
@@ -1009,8 +1011,8 @@ async function logDevicesToD1(env: Env): Promise<void> {
 
   // บันทึก D1
   const stmt = env.DB.prepare(
-    `INSERT INTO readings (ts, device_id, device_name, pm25, pm10, aqi, temperature, humidity, power)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO readings (ts, device_id, device_name, pm25, pm10, aqi, temperature, humidity, power, mode, filter_pct)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   const inserts = devices
@@ -1026,6 +1028,8 @@ async function logDevicesToD1(env: Env): Promise<void> {
         d.values.temp   ?? null,
         d.values.hum    ?? null,
         d.values.power  != null ? (d.values.power ? 1 : 0) : null,
+        d.values.mode   ?? null,
+        d.values.filter ?? null,
       )
     );
 
@@ -1407,7 +1411,18 @@ export default {
       try {
         const result = await withWorkingCreds(env, (creds) =>
           xiaomiRequest(controlUrl, dataJson, creds)
-        );
+        ) as { result?: { code?: number }[] };
+
+        // Xiaomi ตอบ code=0 ที่ชั้นนอกเสมอ แม้เครื่องจะปฏิเสธค่า — ต้องดู code รายprop
+        // (เช่น สั่ง maxdown mode=5 ได้ -704220043 แต่ชั้นนอกยัง ok)
+        const propCode = result.result?.[0]?.code;
+        if (typeof propCode === "number" && propCode !== 0) {
+          return jsonResponse(
+            { ok: false, error: `device rejected value (code ${propCode})`, result },
+            502,
+            origin
+          );
+        }
         return jsonResponse({ ok: true, result }, 200, origin);
       } catch (err) {
         return errorResponse(String(err), 502, origin);
@@ -1619,6 +1634,7 @@ export default {
         device_id: string; device_name: string;
         pm25?: number | null; pm10?: number | null; aqi?: number | null;
         temperature?: number | null; humidity?: number | null; power?: boolean | null;
+        mode?: number | null; filter_pct?: number | null;
       }> };
       try {
         body = await request.json();
@@ -1632,8 +1648,8 @@ export default {
 
       const ts = Math.floor(Date.now() / 1000);
       const stmt = env.DB.prepare(
-        `INSERT INTO readings (ts, device_id, device_name, pm25, pm10, aqi, temperature, humidity, power)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO readings (ts, device_id, device_name, pm25, pm10, aqi, temperature, humidity, power, mode, filter_pct)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       const inserts = body.readings.map((r) =>
@@ -1647,6 +1663,8 @@ export default {
           r.temperature ?? null,
           r.humidity    ?? null,
           r.power != null ? (r.power ? 1 : 0) : null,
+          r.mode       ?? null,
+          r.filter_pct ?? null,
         )
       );
 

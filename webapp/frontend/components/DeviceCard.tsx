@@ -14,12 +14,13 @@ interface ModeOption {
   value: number;
 }
 
+// โหมดที่เครื่องรับจริง — verified 2026-08-01 ด้วยการสั่งจริงแล้วอ่านค่ากลับ
+// 4lite: mode=3 (Fan) และ maxdown: 3–5 (L1–L3) ถูกปฏิเสธ (code -704220043) จึงตัดออก
 const DEVICE_MODES: Record<string, ModeOption[]> = {
   "4lite": [
     { label: "Auto",     value: 0 },
     { label: "Sleep",    value: 1 },
     { label: "Favorite", value: 2 },
-    { label: "Fan",      value: 3 },
   ],
   maxpro: [
     { label: "Auto",  value: 0 },
@@ -33,15 +34,18 @@ const DEVICE_MODES: Record<string, ModeOption[]> = {
     { label: "Auto",  value: 0 },
     { label: "Sleep", value: 1 },
     { label: "Fav",   value: 2 },
-    { label: "L1",    value: 3 },
-    { label: "L2",    value: 4 },
-    { label: "L3",    value: 5 },
   ],
   cat: [
     { label: "Auto",  value: 0 },
     { label: "Sleep", value: 1 },
     { label: "Fav",   value: 2 },
   ],
+};
+
+/** ช่วงค่าพัดลม Favorite ต่อรุ่น — โชว์ slider เฉพาะรุ่นที่มี prop `fan` */
+const FAN_RANGE: Record<string, { min: number; max: number }> = {
+  "4lite": { min: 1, max: 14 },
+  maxpro:  { min: 0, max: 9  },
 };
 
 function fmt(v: number | undefined, decimals = 0): string {
@@ -114,8 +118,9 @@ export default function DeviceCard({ device, onRefresh }: DeviceCardProps) {
     await control("lock", newVal);
   }
 
-  // Show fan slider only for 4lite when mode is Favorite (2)
-  const showFanSlider = id === "4lite" && effectiveMode === 2;
+  // Fan slider โผล่เฉพาะรุ่นที่มี prop fan และกำลังอยู่โหมด Favorite (2)
+  const fanRange = FAN_RANGE[id];
+  const showFanSlider = !!specs?.props.fan && !!fanRange && effectiveMode === 2;
 
   // PM2.5 progress bar — max at 150 µg/m³
   const pm25Pct = Math.min(100, ((pm25 ?? 0) / 150) * 100);
@@ -257,9 +262,9 @@ export default function DeviceCard({ device, onRefresh }: DeviceCardProps) {
           </div>
           <input
             type="range"
-            min={1}
-            max={14}
-            value={effectiveFan ?? 1}
+            min={fanRange?.min ?? 1}
+            max={fanRange?.max ?? 14}
+            value={effectiveFan ?? fanRange?.min ?? 1}
             disabled={sending || !online}
             onChange={(e) => setLocalFan(Number(e.target.value))}
             onMouseUp={(e) => handleFan(Number((e.target as HTMLInputElement).value))}
