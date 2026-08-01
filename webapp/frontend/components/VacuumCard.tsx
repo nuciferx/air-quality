@@ -53,6 +53,53 @@ function fmtMinutes(seconds: number | undefined): string {
   return `${m} นาที`;
 }
 
+/** ประวัติทำความสะอาดจาก prop plaintext (S10/P3 + S10/P15) — ไม่ต้องถอดรหัสไฟล์แผนที่ */
+function CleanHistory({ clean, cloud }: { clean?: string; cloud?: string }) {
+  const parse = <T,>(raw?: string): T | null => {
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return null;
+    }
+  };
+
+  const rec = parse<{ total_time?: number; total_area?: number; total_count?: number }>(clean);
+  const last = parse<{ label?: string; stime?: number }>(cloud);
+  if (!rec?.total_count && !last?.stime) return null;
+
+  const hours = rec?.total_time !== undefined ? Math.round(rec.total_time / 60) : null;
+  const sqm = rec?.total_area !== undefined ? Math.round(rec.total_area / 1000) : null;
+  const lastArea = Number(last?.label?.split("_")[1]);
+  const lastWhen = last?.stime
+    ? new Date(last.stime * 1000).toLocaleString("th-TH", {
+        timeZone: "Asia/Bangkok",
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+
+  return (
+    <div className="pt-1 border-t border-gray-800 text-[11px] text-gray-400 flex flex-col gap-0.5">
+      {rec?.total_count !== undefined && (
+        <div>
+          สะสม <span className="text-white font-semibold">{rec.total_count}</span> รอบ
+          {hours !== null && <> · {hours.toLocaleString("th-TH")} ชม.</>}
+          {sqm !== null && <> · {sqm.toLocaleString("th-TH")} m²</>}
+        </div>
+      )}
+      {lastWhen && (
+        <div>
+          รอบล่าสุด {lastWhen}
+          {Number.isFinite(lastArea) && <> · {(lastArea / 1000).toFixed(1)} m²</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LifeBar({ label, pct }: { label: string; pct: number | undefined }) {
   const val = pct ?? 0;
   const color = val > 50 ? "#22c55e" : val > 20 ? "#eab308" : "#ef4444";
@@ -150,6 +197,25 @@ export default function VacuumCard({ vacuum, onRefresh }: VacuumCardProps) {
           <span className="text-xs font-semibold text-white">{fmtMinutes(values.clean_time)}</span>
         </div>
       </div>
+
+      {/* ความคืบหน้ารอบปัจจุบัน — โชว์เฉพาะตอนกำลังกวาด/ถู */}
+      {values.progress !== undefined && [4, 16, 17].includes(values.status ?? -1) && (
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] uppercase tracking-wide text-gray-500">ความคืบหน้า</span>
+            <span className="text-xs font-semibold text-white">{values.progress}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-cyan-400 transition-all duration-500"
+              style={{ width: `${Math.min(100, values.progress)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ประวัติสะสม — จาก clean_record (plaintext ไม่ต้องถอดรหัสแผนที่) */}
+      <CleanHistory clean={values.clean_record} cloud={values.cloud_record} />
 
       {/* Life bars */}
       <div className="flex flex-col gap-1.5 pt-1 border-t border-gray-800">

@@ -32,6 +32,18 @@ description: Compact live status board for the Xiaomi S40 Pro robot vacuum (host
 `7`กำลังล้างม็อบ `9`ชาร์จเต็ม `10`กำลังสร้างแผนที่ `15`⚠️Error `16`กวาด+ถู `17`ถู `14`แท่นทำงาน
 (ไม่รู้จัก → แสดงเลขดิบ) · charging: `1`ชาร์จอยู่ `2`ไม่ชาร์จ `3`ชาร์จไม่ได้
 
+## หน่วยที่ต้องแปลงก่อนแสดง (verified 2026-08-01)
+
+| field | หน่วยดิบ | แปลง |
+|---|---|---|
+| `clean_area` | 0.01 m² | ÷ 100 |
+| `clean_time` | วินาที | ÷ 60 |
+| `clean_record.total_area` | m² × 1000 | ÷ 1000 |
+| `clean_record.total_time` | นาที | ÷ 60 = ชม. |
+| `cloud_record.label` | `"<นาที>_<m²×1000>_..."` | field[1] ÷ 1000 |
+
+`clean_record` / `cloud_record` / `map_mgmt` / `room_info` เป็น **JSON string** ต้อง parse ก่อน
+
 ## Output format (เคร่งครัด — ≤200 คำ)
 
 ```

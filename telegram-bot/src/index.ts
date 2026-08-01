@@ -849,8 +849,29 @@ function chargingLabel(charging: number | undefined): string {
   }
 }
 
+interface CleanRecord {
+  total_time?: number;   // นาที
+  total_area?: number;   // หาร 1000 = ตร.ม.
+  total_count?: number;
+  history_list?: { label?: string; stime?: number }[];
+}
+
+interface CloudRecord {
+  label?: string;        // "<นาที>_<ตร.ม.×1000>_..."
+  stime?: number;
+}
+
+function parseJson<T>(raw: unknown): T | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
 async function handleVacuum(env: Env): Promise<string> {
-  let data: { vacuums?: { id: string; name: string; did: string; host: string; online: boolean; values: { status?: number; battery?: number; charging?: number; clean_area?: number; clean_time?: number; mode?: number; mop_life?: number; main_brush_life?: number; side_brush_life?: number; filter_life?: number } }[] };
+  let data: { vacuums?: { id: string; name: string; did: string; host: string; online: boolean; values: { status?: number; battery?: number; charging?: number; clean_area?: number; clean_time?: number; mode?: number; mop_life?: number; main_brush_life?: number; side_brush_life?: number; filter_life?: number; progress?: number; clean_record?: string; cloud_record?: string } }[] };
   try {
     const res = await apiGet(env, "/api/vacuum");
     if (!res.ok) return `⚠️ ดึงข้อมูลหุ่นยนต์ดูดฝุ่นไม่สำเร็จ (HTTP ${res.status})`;
@@ -876,7 +897,32 @@ async function handleVacuum(env: Env): Promise<string> {
       // clean_area หน่วยดิบ = 0.01 m² · clean_time หน่วยดิบ = วินาที
       const areaSqm = vals.clean_area !== undefined ? (vals.clean_area / 100).toFixed(1) : "—";
       const timeMin = vals.clean_time !== undefined ? Math.round(vals.clean_time / 60) : "—";
-      msg += `  รอบล่าสุด: ${areaSqm} ม² | ${timeMin} นาที\n`;
+      msg += `  รอบล่าสุด: ${areaSqm} ม² | ${timeMin} นาที`;
+      // กำลังกวาด/ถู → โชว์ความคืบหน้าด้วย
+      if (vals.progress !== undefined && vals.status !== undefined && [4, 16, 17].includes(vals.status)) {
+        msg += ` | คืบหน้า ${vals.progress}%`;
+      }
+      msg += `\n`;
+    }
+
+    const cloud = parseJson<CloudRecord>(vals.cloud_record);
+    if (cloud?.stime) {
+      const when = new Date(cloud.stime * 1000).toLocaleString("th-TH", {
+        timeZone: REPORT_TIMEZONE, day: "numeric", month: "short", hour: "2-digit", minute: "2-digit",
+      });
+      const areaField = Number(cloud.label?.split("_")[1]);
+      const area = Number.isFinite(areaField) ? ` · ${(areaField / 1000).toFixed(1)} ม²` : "";
+      msg += `  เริ่มรอบล่าสุด: ${when}${area}\n`;
+    }
+
+    const rec = parseJson<CleanRecord>(vals.clean_record);
+    if (rec?.total_count) {
+      const hours = rec.total_time ? Math.round(rec.total_time / 60) : null;
+      const sqm = rec.total_area ? Math.round(rec.total_area / 1000) : null;
+      msg += `  📈 สะสม: ${rec.total_count} รอบ`;
+      if (hours !== null) msg += ` · ${hours} ชม.`;
+      if (sqm !== null) msg += ` · ${sqm.toLocaleString("th-TH")} ม²`;
+      msg += `\n`;
     }
     const lifeParts: string[] = [];
     if (vals.main_brush_life !== undefined) lifeParts.push(`แปรงหลัก ${vals.main_brush_life}%`);

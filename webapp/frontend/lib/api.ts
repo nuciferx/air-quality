@@ -201,6 +201,15 @@ export interface VacuumValues {
   main_brush_life?: number;
   side_brush_life?: number;
   filter_life?: number;
+  progress?: number;
+  /** JSON string — total_time (นาที) / total_area (÷1000 = ตร.ม.) / total_count / history_list */
+  clean_record?: string;
+  /** JSON string — label "<นาที>_<ตร.ม.×1000>_..." + stime */
+  cloud_record?: string;
+  /** JSON string — รายการ map slot ที่บันทึกไว้ */
+  map_mgmt?: string;
+  /** JSON string — rooms[] + map_uid */
+  room_info?: string;
 }
 
 export interface Vacuum {
