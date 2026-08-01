@@ -150,6 +150,12 @@ const VACUUMS: VacuumConfig[] = [
       main_brush_life: { siid: 12, piid: 1 }, // %
       side_brush_life: { siid: 13, piid: 1 }, // %
       filter_life:    { siid: 14, piid: 1 },  // %
+      // ข้อมูล plaintext ที่ใช้ได้จริง (probe 2026-08-01 — ที่เหลือคืนค่าว่างเสมอ ตัดทิ้ง)
+      clean_record:   { siid: 10, piid: 3  },  // JSON: total_time/total_area/total_count + history_list
+      cloud_record:   { siid: 10, piid: 15 },  // JSON: รอบล่าสุด label "<นาที>_<พื้นที่×10>_..."
+      map_mgmt:       { siid: 10, piid: 5  },  // JSON: รายการ map slot ที่บันทึกไว้
+      room_info:      { siid: 2,  piid: 16 },  // JSON: rooms[] + map_uid
+      progress:       { siid: 2,  piid: 89 },  // % ของรอบปัจจุบัน
     },
     actions: {
       start_sweep:      { siid: 2, aiid: 1 },
@@ -1477,6 +1483,72 @@ export default {
       }
 
       return jsonResponse({ scenes: out }, 200, origin);
+    }
+
+    // GET /api/vacuum/inspect?obj=<obj_name> — ตรวจว่าไฟล์ใน bucket ของหุ่นเข้ารหัสไหม
+    // คืนเฉพาะ metadata (ขนาด/ไบต์แรก/เป็น zlib ไหม) ไม่คืนตัวข้อมูล — ใช้ไล่ spike แผนที่
+    if (request.method === "GET" && path === "/api/vacuum/inspect") {
+      const obj = url.searchParams.get("obj");
+      if (!obj) return errorResponse("Missing obj", 400, origin);
+
+      // ลอง endpoint ได้หลายตัว — cloud clean record ใช้ path คนละแบบกับ interim map
+      const API_PATHS: Record<string, string> = {
+        pro:    "/app/v2/home/get_interim_file_url_pro",
+        plain:  "/app/v2/home/get_interim_file_url",
+        file:   "/app/v2/home/get_file_url",
+        record: "/app/v2/home/get_clean_record_file_url",
+        user:   "/app/user/get_user_device_data",
+      };
+      const apiKey = url.searchParams.get("api") ?? "pro";
+      const apiPath = API_PATHS[apiKey];
+      if (!apiPath) return errorResponse(`Unknown api: ${apiKey}`, 400, origin);
+
+      try {
+        const meta = await withWorkingCreds(env, (creds) =>
+          xiaomiRequest(
+            `${HOST_BASE.us}${apiPath}`,
+            JSON.stringify({ obj_name: obj }),
+            creds
+          )
+        ) as { code?: number; message?: string; result?: { url?: string } };
+
+        const fileUrl = meta.result?.url;
+        if (!fileUrl) {
+          return jsonResponse({ obj, ok: false, code: meta.code, message: meta.message }, 200, origin);
+        }
+
+        const fileRes = await fetch(fileUrl);
+        const text = await fileRes.text();
+
+        let version: unknown = null;
+        let payload: Uint8Array | null = null;
+        try {
+          const wrapper = JSON.parse(text) as { version?: unknown; data?: string };
+          version = wrapper.version ?? null;
+          if (typeof wrapper.data === "string") payload = b64decode(wrapper.data);
+        } catch {
+          // ไม่ใช่ JSON wrapper — ไฟล์ดิบ
+        }
+
+        const head = payload ? payload.slice(0, 24) : new TextEncoder().encode(text.slice(0, 24));
+        const headHex = [...head].map((b) => b.toString(16).padStart(2, "0")).join("");
+        const len = payload ? payload.length : text.length;
+
+        return jsonResponse({
+          obj,
+          ok: true,
+          httpBytes: text.length,
+          wrapperVersion: version,
+          payloadBytes: len,
+          mod16: len % 16,
+          headHex,
+          looksZlib: !!payload && payload[0] === 0x78,
+          looksJson: text.trimStart().startsWith("{") && !payload,
+          textHead: payload ? undefined : text.slice(0, 120),
+        }, 200, origin);
+      } catch (err) {
+        return errorResponse(String(err).slice(0, 200), 502, origin);
+      }
     }
 
     // GET /api/vacuum — fetch all vacuum statuses

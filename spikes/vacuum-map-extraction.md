@@ -120,6 +120,48 @@ reference decoder ijai สร้าง inner key = mac(12)+tail สำหรั�
 → สรุป: **"download ปลั๊กอินรุ่นนี้แล้ว grep หา key" ไม่มีจริง** — decrypt logic อยู่ในโค้ด native ที่ share
 ทั้งแอป (ต้อง reverse ตัว Mi Home IPA / tinyrender lib เอง ไม่ใช่ bundle เล็กๆ)
 
+### รอบ 2026-08-01 — ปิดทางเพิ่ม 4 ทาง แต่ได้ข้อมูล plaintext ชุดใหม่
+
+ทดสอบผ่าน worker (`GET /api/vacuum/inspect`, prop probe) + LAN miIO **ขณะหุ่นกำลังกวาดจริง**
+(ต่างจากรอบก่อนที่ทดสอบตอนหุ่นจอด):
+
+**ปิดทางแล้ว:**
+- ❌ **`vacuum_position` S10/P4 ว่างเปล่าแม้ตอนกำลังกวาด** — ทั้งผ่าน cloud และ LAN
+  → แผน "poll พิกัดแล้ววาดเส้นทางเอง โดยไม่ต้องถอดรหัส" **เป็นไปไม่ได้** แอปอ่านตำแหน่งจากในไฟล์ map
+- ❌ **trajectory slot 1 ไม่เคยมีไฟล์จริง** — `S10/P2` ชี้ `<uid>/<did>/1` แต่ FDS คืน `Object Not Found`
+  ทั้งตอนจอด ตอนกวาด และหลังจบรอบ
+- ❌ **ไม่มี thumbnail/ภาพ render สำเร็จรูป** — ลอง `<uid>/<did>/0.png|0.jpg|thumb|4|5` → Object Not Found หมด
+- ❌ **cloud clean record `.bin` ดึงไม่ได้ด้วย API ที่รู้จัก** — `S10/P15` ชี้
+  `2026/08/02/<uid>/<did>_001050835.bin` แต่ `get_interim_file_url(_pro)` ตอบ `-6 invalid object name`
+  (validate ว่า obj_name ต้องเป็น `<uid>/<did>/<n>` เท่านั้น) · `/app/v2/home/get_file_url`,
+  `/app/v2/home/get_clean_record_file_url` → 404 (ไม่มี endpoint)
+- ❌ ไม่มี decoder สาธารณะรองรับ `version:2` (ค้น 2026-08-01: PiotrMachowski #714, tooljose88 fork,
+  ha_xiaomi_home #1539 — issue S40 Pro ยังไม่มีคนตอบ)
+
+**ได้ข้อมูล plaintext ชุดใหม่ (spike เดิมไล่แต่ common-params เลยไม่เคยอ่าน):**
+| prop | เนื้อหา |
+|---|---|
+| `S10/P3 clean_record` | ประวัติสะสม — `total_time` 4791 นาที, `total_area` 2975410, `total_count` 100 + `history_list` |
+| `S10/P15 cloud_record` | รอบล่าสุด: label `"<นาที>_<พื้นที่×10>_..."` (ยืนยันกับรอบทดสอบ: `00004_4030` = 4 นาที / 4.03 m²) |
+| `S10/P5 map_mgmt` | มี **4 map slot** (0/2/3 มีไฟล์จริง ทั้งหมด `version:2` เข้ารหัส) |
+| `S2/P16 room_info` | `{"rooms":[{"id":3,"name":""}],"map_uid":2}` |
+| `S2/P40 cur_cfg`, `S2/P89 progress` | โหมด/ความคืบหน้ารอบปัจจุบัน |
+
+→ props พวกนี้ถูกเพิ่มเข้า `/api/vacuum` แล้ว (ใช้ทำหน้าประวัติทำความสะอาดได้ทันทีโดยไม่ต้องถอดรหัส)
+
+### ทางที่เหลือ (re-ranked 2026-08-01)
+**A. Android app data** (ทางเดียวที่ deterministic และไม่ต้องแตะหุ่น) — สคริปต์พร้อมแล้ว:
+`spikes/android_extract_wifi_sn.py` รับ `adb backup` (.ab) / tar / โฟลเดอร์ที่ pull มา แล้วสแกนหา
+`wifi_sn` ทั้งใน sqlite และไฟล์ดิบ · Android ง่ายกว่า iOS มาก (APK ไม่เข้ารหัส, `adb backup` ไม่ต้อง root)
+ถ้า Android 12+ บล็อก backup → ใช้ emulator ที่รูทได้แล้ว `adb pull /data/data/com.xiaomi.smarthome`
+
+**B. Frida hook `Cipher.init`** บน emulator — ดักคีย์ AES ตอน runtime (ปลดโดยไม่ต้องรู้ wifi_sn)
+
+**C. ทดสอบล็อกอินเครื่องใหม่** — ถ้าแผนที่ขึ้นบนเครื่องที่ไม่เคย pair แปลว่า key material ดึงจาก cloud ได้
+(ล้มสมมุติฐาน "cache ตั้งแต่ pairing") → เป้าหมายเปลี่ยนเป็นจับ traffic ตอน first-load **โดยไม่ต้องล้างหุ่น**
+
+**D. (ของเดิม) reverse Mi Home native renderer / จับ traffic ตอน pairing**
+
 ### ทางที่เหลือ (re-ranked 2026-06-27 หลังปิด cheap-plugin path)
 1. **ดึง wifi_sn จาก app local storage** (iOS Mi Home container — jailbreak หรือ encrypted-backup extract) —
    **deterministic ถ้าได้ container** (wifi_sn ถูก cache ตั้งแต่ pairing) ต้องเข้าถึงเครื่อง/iTunes backup
