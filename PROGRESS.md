@@ -48,6 +48,13 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 - worker: เพิ่ม prop `fan { siid: 9, piid: 11 }` ให้ `4lite` ใน `DEVICES` — เดิม `/api/devices` ไม่เคยคืนค่าพัดลม ทำให้ทั้ง slider บนเว็บและปุ่มในบอทไม่รู้ค่าปัจจุบัน
 - ⚠️ `maxpro` / `maxdown` / `cat` ยังไม่มี prop ระดับพัดลมที่ verify แล้ว — Favorite จึงใช้ระดับที่เครื่องจำไว้ ถ้าต้องการลมแรงสุดแบบชัวร์ให้เลือก `L3` (maxpro/maxdown)
 
+### Fix 2026-08-01 — หน่วย/enum ของหุ่นดูดฝุ่นไม่ตรงกันทั้ง 3 ชั้น
+ตรวจ API จริงเทียบเอกสารแล้วเจอ 4 จุดที่ payload ไม่ตรงกับที่โค้ดคาดไว้:
+- `charging` เป็น enum (`1`ชาร์จ `2`ไม่ชาร์จ `3`ชาร์จไม่ได้) แต่บอทประกาศเป็น `boolean` แล้วเช็ก truthy → ค่า `2` ก็ขึ้น "กำลังชาร์จ" ตลอด → เพิ่ม `chargingLabel()`
+- `clean_time` หน่วยวินาที แต่บอทพิมพ์ต่อท้ายว่า "นาที" → หาร 60 ก่อน (2640 → 44 นาที)
+- `clean_area` หน่วยดิบ = 0.01 m² — บอทหาร 1,000,000 (ได้ 0.0), frontend แสดงดิบ (ได้ 3098 m²) → หาร 100 ทั้งคู่ (3098 → 30.98 m²) ยืนยันจาก 3098 m² ใน 44 นาที เป็นไปไม่ได้
+- `vacuumStatusLabel` ของ frontend เป็น mapping ของ roborock (9 = spot clean) คนละชุดกับบอท + skill doc → ยึดชุด ijai ยืนยันจากของจริง `status=9 + battery=100 + charging=1` = ชาร์จเต็ม
+
 ### Sprint 2026-06-23 — Vacuum support + US host routing
 - เพิ่ม host `us` → `https://us.api.io.mi.com` ใน `apiUrl()` (worker)
 - เพิ่ม `VACUUMS` registry แยกจาก `DEVICES` — ไม่เข้า D1 / auto-control / deadman / SSE

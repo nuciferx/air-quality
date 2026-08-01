@@ -27,6 +27,7 @@ dist/
 # ── Local state / logs ──────────────────────────────────────────────────
 *.log
 .session_state.json
+.claude/scheduled_tasks.lock
 
 # ── Windows artifacts ───────────────────────────────────────────────────
 desktop.ini

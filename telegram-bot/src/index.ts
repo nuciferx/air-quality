@@ -794,8 +794,17 @@ function vacuumStatusLabel(status: number): string {
   }
 }
 
+/** S3.P2 — 1=ชาร์จอยู่ 2=ไม่ชาร์จ 3=ชาร์จไม่ได้ (เป็น enum ไม่ใช่ boolean) */
+function chargingLabel(charging: number | undefined): string {
+  switch (charging) {
+    case 1: return " ⚡ กำลังชาร์จ";
+    case 3: return " ⚠️ ชาร์จไม่ได้";
+    default: return "";
+  }
+}
+
 async function handleVacuum(env: Env): Promise<string> {
-  let data: { vacuums?: { id: string; name: string; did: string; host: string; online: boolean; values: { status?: number; battery?: number; charging?: boolean; clean_area?: number; clean_time?: number; mode?: number; mop_life?: number; main_brush_life?: number; side_brush_life?: number; filter_life?: number } }[] };
+  let data: { vacuums?: { id: string; name: string; did: string; host: string; online: boolean; values: { status?: number; battery?: number; charging?: number; clean_area?: number; clean_time?: number; mode?: number; mop_life?: number; main_brush_life?: number; side_brush_life?: number; filter_life?: number } }[] };
   try {
     const res = await apiGet(env, "/api/vacuum");
     if (!res.ok) return `⚠️ ดึงข้อมูลหุ่นยนต์ดูดฝุ่นไม่สำเร็จ (HTTP ${res.status})`;
@@ -815,13 +824,12 @@ async function handleVacuum(env: Env): Promise<string> {
     msg += `<b>${v.name}</b> ${v.online ? "✅ ออนไลน์" : "❌ ออฟไลน์"}\n`;
     if (vals.status !== undefined) msg += `  สถานะ: ${vacuumStatusLabel(vals.status)}\n`;
     if (vals.battery !== undefined) {
-      msg += `  แบตเตอรี่: ${vals.battery}%`;
-      if (vals.charging !== undefined) msg += vals.charging ? " ⚡ กำลังชาร์จ" : "";
-      msg += `\n`;
+      msg += `  แบตเตอรี่: ${vals.battery}%${chargingLabel(vals.charging)}\n`;
     }
     if (vals.clean_area !== undefined || vals.clean_time !== undefined) {
-      const areaSqm = vals.clean_area !== undefined ? (vals.clean_area / 1000000).toFixed(1) : "—";
-      const timeMin = vals.clean_time !== undefined ? vals.clean_time : "—";
+      // clean_area หน่วยดิบ = 0.01 m² · clean_time หน่วยดิบ = วินาที
+      const areaSqm = vals.clean_area !== undefined ? (vals.clean_area / 100).toFixed(1) : "—";
+      const timeMin = vals.clean_time !== undefined ? Math.round(vals.clean_time / 60) : "—";
       msg += `  รอบล่าสุด: ${areaSqm} ม² | ${timeMin} นาที\n`;
     }
     const lifeParts: string[] = [];

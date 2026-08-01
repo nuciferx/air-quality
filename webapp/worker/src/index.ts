@@ -139,7 +139,7 @@ const VACUUMS: VacuumConfig[] = [
     host: "us",
     props: {
       status:         { siid: 2, piid: 2  },  // uint8 1-24
-      clean_area:     { siid: 2, piid: 6  },  // m²
+      clean_area:     { siid: 2, piid: 6  },  // 0.01 m² (หาร 100 ก่อนแสดง — 3098 = 30.98 m²)
       clean_time:     { siid: 2, piid: 7  },  // seconds
       mode:           { siid: 2, piid: 9  },
       battery:        { siid: 3, piid: 1  },  // %

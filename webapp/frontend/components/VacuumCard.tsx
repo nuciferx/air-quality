@@ -9,30 +9,25 @@ interface VacuumCardProps {
   onRefresh?: () => void;
 }
 
+// S2.P2 (xiaomi.vacuum.ov71gl / ijai) — ชุดเดียวกับ telegram-bot + .claude/skills/vacuum-status
+// ยืนยันจากของจริง: status=9 + battery=100 + charging=1 → "ชาร์จเต็ม"
+// (ชุดเดิมที่นี่เป็น mapping ของ roborock ทำให้ 9 กลายเป็น "spot clean" ผิดมาตลอด)
 function vacuumStatusLabel(status: number | undefined): string {
   if (status === undefined || status === null) return "—";
   switch (status) {
-    case 1:  return "เริ่มต้น";
-    case 2:  return "กำลังหยุด/สแตนด์บาย";
-    case 3:  return "หยุดชั่วคราว";
+    case 1:  return "ว่าง";
+    case 2:  return "กำลังชาร์จ";
+    case 3:  return "พักชาร์จ";
     case 4:  return "กำลังกวาด";
-    case 5:  return "กำลังกลับแท่น";
+    case 5:  return "หยุดชั่วคราว";
     case 6:  return "กำลังกลับแท่น";
-    case 7:  return "ชาร์จอยู่";
-    case 8:  return "ข้อผิดพลาด";
-    case 9:  return "กำลังทำ spot clean";
-    case 10: return "ไม่ได้ใช้งาน";
-    case 11: return "กำลังลาก";
-    case 12: return "กำลังถอดออก";
-    case 13: return "กำลังชาร์จ (error)";
-    case 14: return "แผนที่ถูกแก้ไข";
-    case 15: return "กำลัง update ดัสต์บ็อกซ์";
-    case 16: return "pause ไม่ตอบสนอง";
-    case 17: return "กำลังถอดออก (error)";
-    case 18: return "กำลังกวาด (ห้ามรบกวน)";
-    case 22: return "กำลังถูพื้น";
-    case 23: return "กำลังถูพื้น + กวาด";
-    case 26: return "กำลังทำความสะอาด";
+    case 7:  return "กำลังล้างม็อบ";
+    case 9:  return "ชาร์จเต็ม";
+    case 10: return "กำลังสร้างแผนที่";
+    case 14: return "แท่นทำงาน";
+    case 15: return "⚠️ Error";
+    case 16: return "กวาด + ถู";
+    case 17: return "กำลังถู";
     default: return `สถานะ ${status}`;
   }
 }
@@ -144,7 +139,7 @@ export default function VacuumCard({ vacuum, onRefresh }: VacuumCardProps) {
             <span className="text-[9px] uppercase tracking-wide">พื้นที่</span>
           </div>
           <span className="text-xs font-semibold text-white">
-            {values.clean_area !== undefined ? `${fmt(values.clean_area, 1)} m²` : "—"}
+            {values.clean_area !== undefined ? `${fmt(values.clean_area / 100, 1)} m²` : "—"}
           </span>
         </div>
         <div className="flex flex-col items-start gap-0.5 bg-gray-800 rounded-lg p-1.5">
