@@ -194,7 +194,8 @@ auto-renew/renew_token_passtoken.py → script หลัก
 - service: `telegram-bot`
 - config: `telegram-bot/wrangler.toml`
 - งานที่ทำ:
-  - รับคำสั่ง `/status`, `/predict`, `/on`, `/off`, `/weather`, `/weather_home`, `/token`, `/ai`
+  - รับคำสั่ง `/menu`, `/status`, `/predict`, `/on`, `/off`, `/weather`, `/weather_home`, `/token`, `/ai`
+  - รับ `callback_query` จาก inline keyboard ของ `/menu` (gate ด้วย `ALLOWED_CHAT_ID` เหมือนข้อความปกติ)
   - ใช้ service binding ไปหา `air-quality-api`
   - fallback ไปที่ `/api/history?hours=1` ถ้า `/api/devices` ใช้งานไม่ได้
   - จำพิกัดล่าสุดที่ผู้ใช้ส่ง location มาให้บอท
@@ -223,6 +224,7 @@ auto-renew/renew_token_passtoken.py → script หลัก
 
 | คำสั่ง | ฟังก์ชัน |
 |--------|---------|
+| `/menu` (หรือ `/control`) | เมนูปุ่มกดควบคุมเครื่องฟอก — เลือกห้อง → เปิด/ปิด, เปลี่ยนโหมด, ปรับพัดลม (4lite ตอน Favorite), เสียง, ล็อกปุ่ม |
 | `/status` | สถานะทุกห้อง (PM2.5, temp, humidity, filter) |
 | `/predict` | ทำนาย PM2.5 trend + วันเปลี่ยน filter |
 | `/on [room]` | เปิดเครื่อง |

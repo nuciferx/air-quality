@@ -70,6 +70,7 @@ const DEVICES: DeviceConfig[] = [
       filter: { siid: 4, piid: 1  },  // % remaining
       buzz:   { siid: 6, piid: 1  },  // bool
       lock:   { siid: 8, piid: 1  },  // bool (child lock)
+      fan:    { siid: 9, piid: 11 },  // 1–14 favorite fan level (มีผลเฉพาะตอน mode=Favorite)
     },
   },
   {

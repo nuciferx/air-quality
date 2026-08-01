@@ -1,6 +1,6 @@
 # Air Quality Project — Progress Log
 
-อัพเดทล่าสุด: 2026-06-23
+อัพเดทล่าสุด: 2026-08-01
 
 ---
 
@@ -33,6 +33,21 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 
 ## ✅ Features
 
+### Sprint 2026-08-01 — เมนูควบคุมเครื่องฟอกใน Telegram
+- คำสั่งใหม่ `/menu` (alias `/control`) — inline keyboard เทียบเท่า `DeviceCard.tsx` บนเว็บ
+- เมนูหลัก: 1 ปุ่ม/ห้อง แสดง power icon + PM2.5 → กดเข้า panel ของห้องนั้น
+- Panel ต่อเครื่อง: เปิด/ปิด, เลือกโหมด (ตาม `modes` ของแต่ละรุ่น), พัดลม ➖/➕ 1–14 (เฉพาะ `4lite` ตอน mode=Favorite เหมือน slider บนเว็บ), 🔔 buzz, 🔒 lock, 🔄 รีเฟรช, ⬅️ กลับเมนู
+- `DEVICE_INFO` ในบอทขยายเป็น `PurifierSpec` (did/host/name/props siid+piid/modes) — sync กับ `DEVICE_PROP_SPECS` + `DEVICE_MODES` บนเว็บ
+- webhook รับ `callback_query` แล้ว (gate `ALLOWED_CHAT_ID` เหมือน message), ตอบ `answerCallbackQuery` เป็น toast + `editMessageText` อัปเดตข้อความเดิม
+- optimistic overlay หลังสั่งงาน (Xiaomi cloud มักคืนค่าเก่าทันทีหลัง prop/set)
+- ไม่แตะ worker — ใช้ `POST /api/control` เดิมผ่าน service binding
+- ปุ่ม Menu สีน้ำเงินในแช็ต: `BOT_COMMANDS` + endpoint `GET /set-commands` (เรียก `setMyCommands` scope = chat ของ `ALLOWED_CHAT_ID`) — ยิงซ้ำทุกครั้งที่เพิ่ม/แก้คำสั่ง
+- `/on` / `/off` แบบไม่ใส่ห้อง → เปิดเมนูปุ่มกดแทน error
+- กด **Favorite** = ฟอกแรงสุด — ตั้ง mode=2 แล้วดันพัดลมขึ้น `fanMax` ให้อัตโนมัติในรุ่นที่สั่งระดับพัดลมได้ (ตอนนี้มีแต่ `4lite`, fanMax=14)
+- ปุ่ม **🌪 ฟอกทั้งบ้าน** บนเมนูหลัก — ปุ่มเดียว: เปิด 4 เครื่อง + Favorite + พัดลมแรงสุด ยิง sequential แล้วรายงานผลรายห้อง (ตอบ callback ก่อนเริ่มกัน `query is too old`)
+- worker: เพิ่ม prop `fan { siid: 9, piid: 11 }` ให้ `4lite` ใน `DEVICES` — เดิม `/api/devices` ไม่เคยคืนค่าพัดลม ทำให้ทั้ง slider บนเว็บและปุ่มในบอทไม่รู้ค่าปัจจุบัน
+- ⚠️ `maxpro` / `maxdown` / `cat` ยังไม่มี prop ระดับพัดลมที่ verify แล้ว — Favorite จึงใช้ระดับที่เครื่องจำไว้ ถ้าต้องการลมแรงสุดแบบชัวร์ให้เลือก `L3` (maxpro/maxdown)
+
 ### Sprint 2026-06-23 — Vacuum support + US host routing
 - เพิ่ม host `us` → `https://us.api.io.mi.com` ใน `apiUrl()` (worker)
 - เพิ่ม `VACUUMS` registry แยกจาก `DEVICES` — ไม่เข้า D1 / auto-control / deadman / SSE
@@ -54,6 +69,7 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 
 | คำสั่ง | ฟังก์ชัน |
 |--------|---------|
+| `/menu` | เมนูปุ่มกดควบคุมเครื่องฟอก (power / mode / fan / buzz / lock) |
 | `/status` | สถานะทุกห้อง (PM2.5, temp, humidity, filter) |
 | `/predict` | ทำนาย PM2.5 trend + วันเปลี่ยน filter |
 | `/on [room]` | เปิดเครื่อง |

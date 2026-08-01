@@ -38,12 +38,12 @@
 
 ### siid/piid Mapping — ห้ามเปลี่ยนถ้าไม่ได้ verify จริง
 
-| Device | ID | Model | Host | DID | PM2.5 | Mode | Power | Hum | Temp | Filter | Buzz | Lock |
-|--------|----|-------|------|-----|-------|------|-------|-----|------|--------|------|------|
-| ห้องทำงาน | 4lite | rmb1 | sg | 873639853 | siid=3,piid=4 | siid=2,piid=4 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=7 | siid=4,piid=1 | siid=6,piid=1 | siid=8,piid=1 |
-| ห้องนอนชั้น2 | maxpro | sa2 | cn | 460764069 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 |
-| โถงชั้นล่าง | maxdown | sb1 | cn | 131590393 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 |
-| ห้องแมวชั้น2 | cat | v7 | cn | 357231085 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=6,piid=1 | siid=5,piid=1 |
+| Device | ID | Model | Host | DID | PM2.5 | Mode | Power | Hum | Temp | Filter | Buzz | Lock | Fan (favorite) |
+|--------|----|-------|------|-----|-------|------|-------|-----|------|--------|------|------|-----|
+| ห้องทำงาน | 4lite | rmb1 | sg | 873639853 | siid=3,piid=4 | siid=2,piid=4 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=7 | siid=4,piid=1 | siid=6,piid=1 | siid=8,piid=1 | siid=9,piid=11 (1–14) |
+| ห้องนอนชั้น2 | maxpro | sa2 | cn | 460764069 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 | — (ยังไม่ verify) |
+| โถงชั้นล่าง | maxdown | sb1 | cn | 131590393 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=7,piid=1 | siid=8,piid=1 | — (ยังไม่ verify) |
+| ห้องแมวชั้น2 | cat | v7 | cn | 357231085 | siid=3,piid=2 | siid=2,piid=2 | siid=2,piid=1 | siid=3,piid=1 | siid=3,piid=3 | siid=4,piid=1 | siid=6,piid=1 | siid=5,piid=1 | — (ยังไม่ verify) |
 
 ### เพิ่ม/เปลี่ยน Device ต้องอัปเดต 5 จุด
 
@@ -182,6 +182,9 @@ Authorization: Bearer <LOG_SECRET>
 
 | Command | Function |
 |---------|----------|
+| `/menu` (alias `/control`) | เมนู inline keyboard ควบคุมเครื่องฟอก — power / mode / fan (4lite เมื่อ mode=Favorite) / buzz / lock ตรงกับ DeviceCard บนเว็บ |
+| `/on` / `/off` เปล่า ๆ | เปิดเมนูปุ่มกดแทน (ต้องมีชื่อห้องต่อท้ายถึงจะสั่งตรง) |
+| ปุ่ม `🌪 ฟอกทั้งบ้าน` | callback `boost` — เปิดทุกเครื่อง + Favorite + พัดลมแรงสุด (เฉพาะรุ่นที่มี `fanMax`) |
 | `/status` | สถานะทุกห้อง |
 | `/predict` | ทำนาย PM2.5 trend + filter |
 | `/on [room]` | เปิดเครื่อง (room: 4lite, maxpro, maxdown, cat) |

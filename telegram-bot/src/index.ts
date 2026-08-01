@@ -29,6 +29,15 @@ interface TelegramLocation {
   longitude: number;
 }
 
+interface InlineButton {
+  text: string;
+  callback_data: string;
+}
+
+interface InlineKeyboard {
+  inline_keyboard: InlineButton[][];
+}
+
 interface StoredLocation extends TelegramLocation {
   label: string;
   updated_at: number;
@@ -63,11 +72,41 @@ async function telegramRequest(token: string, method: string, body: Record<strin
   });
 }
 
-async function sendMessage(token: string, chatId: number, text: string, parseMode = "HTML"): Promise<Response> {
+async function sendMessage(
+  token: string,
+  chatId: number,
+  text: string,
+  parseMode = "HTML",
+  replyMarkup?: InlineKeyboard
+): Promise<Response> {
   return telegramRequest(token, "sendMessage", {
     chat_id: chatId,
     text,
     parse_mode: parseMode,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
+}
+
+async function editMessageText(
+  token: string,
+  chatId: number,
+  messageId: number,
+  text: string,
+  replyMarkup?: InlineKeyboard
+): Promise<Response> {
+  return telegramRequest(token, "editMessageText", {
+    chat_id: chatId,
+    message_id: messageId,
+    text,
+    parse_mode: "HTML",
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+  });
+}
+
+async function answerCallbackQuery(token: string, callbackId: string, text?: string): Promise<Response> {
+  return telegramRequest(token, "answerCallbackQuery", {
+    callback_query_id: callbackId,
+    ...(text ? { text } : {}),
   });
 }
 
@@ -175,12 +214,98 @@ async function askQwen(env: Env, prompt: string, context: string): Promise<strin
 
 // ── Device info mapping ───────────────────────────────────────────────────────
 
-const DEVICE_INFO: Record<string, { did: string; host: string }> = {
-  "4lite": { did: "873639853", host: "sg" },
-  "maxpro": { did: "460764069", host: "cn" },
-  "maxdown": { did: "131590393", host: "cn" },
-  "cat": { did: "357231085", host: "cn" },
+// ⚠️ 5-point device-sync rule (CLAUDE.md): แก้ที่นี่ต้องแก้ worker DEVICES/ROOM_THRESHOLDS
+// + frontend DEVICE_PROP_SPECS + DeviceCard DEVICE_MODES ให้ตรงกันเสมอ
+interface PurifierSpec {
+  did: string;
+  host: string;
+  name: string;
+  props: Record<string, { siid: number; piid: number }>;
+  modes: { label: string; value: number }[];
+  /** ระดับพัดลมสูงสุดของ Favorite — มีเฉพาะรุ่นที่เปิด prop `fan` ให้สั่งได้ */
+  fanMax?: number;
+}
+
+/** ค่า mode = Favorite ตรงกันทั้ง 4 รุ่น (0=Auto 1=Sleep 2=Favorite) */
+const FAVORITE_MODE = 2;
+
+const DEVICE_INFO: Record<string, PurifierSpec> = {
+  "4lite": {
+    did: "873639853",
+    host: "sg",
+    name: "ห้องทำงาน",
+    props: {
+      power: { siid: 2, piid: 1 },
+      mode:  { siid: 2, piid: 4 },
+      fan:   { siid: 9, piid: 11 },
+      buzz:  { siid: 6, piid: 1 },
+      lock:  { siid: 8, piid: 1 },
+    },
+    modes: [
+      { label: "Auto", value: 0 },
+      { label: "Sleep", value: 1 },
+      { label: "Favorite", value: 2 },
+      { label: "Fan", value: 3 },
+    ],
+    fanMax: 14,
+  },
+  "maxpro": {
+    did: "460764069",
+    host: "cn",
+    name: "ห้องนอนชั้น 2",
+    props: {
+      power: { siid: 2, piid: 1 },
+      mode:  { siid: 2, piid: 2 },
+      buzz:  { siid: 7, piid: 1 },
+      lock:  { siid: 8, piid: 1 },
+    },
+    modes: [
+      { label: "Auto", value: 0 },
+      { label: "Sleep", value: 1 },
+      { label: "Fav", value: 2 },
+      { label: "L1", value: 3 },
+      { label: "L2", value: 4 },
+      { label: "L3", value: 5 },
+    ],
+  },
+  "maxdown": {
+    did: "131590393",
+    host: "cn",
+    name: "โถงชั้นล่าง",
+    props: {
+      power: { siid: 2, piid: 1 },
+      mode:  { siid: 2, piid: 2 },
+      buzz:  { siid: 7, piid: 1 },
+      lock:  { siid: 8, piid: 1 },
+    },
+    modes: [
+      { label: "Auto", value: 0 },
+      { label: "Sleep", value: 1 },
+      { label: "Fav", value: 2 },
+      { label: "L1", value: 3 },
+      { label: "L2", value: 4 },
+      { label: "L3", value: 5 },
+    ],
+  },
+  "cat": {
+    did: "357231085",
+    host: "cn",
+    name: "ห้องแมวชั้น 2",
+    props: {
+      power: { siid: 2, piid: 1 },
+      mode:  { siid: 2, piid: 2 },
+      buzz:  { siid: 6, piid: 1 },
+      lock:  { siid: 5, piid: 1 },
+    },
+    modes: [
+      { label: "Auto", value: 0 },
+      { label: "Sleep", value: 1 },
+      { label: "Fav", value: 2 },
+    ],
+  },
 };
+
+const ROOM_ORDER = ["4lite", "maxpro", "maxdown", "cat"];
 
 function pm25Label(value: number | undefined): string {
   if (value === undefined || value === null) return "N/A";
@@ -417,6 +542,205 @@ async function handleControl(env: Env, chatId: number, deviceId: string, action:
   }
 }
 
+// ── Control menu (inline keyboard mirror of the webapp DeviceCard) ───────────
+
+interface DeviceSnapshot {
+  id: string;
+  name: string;
+  online: boolean;
+  values: Record<string, unknown>;
+}
+
+async function fetchSnapshots(env: Env): Promise<Record<string, DeviceSnapshot>> {
+  const data = await fetchDevices(env) as { devices?: DeviceSnapshot[] };
+  const map: Record<string, DeviceSnapshot> = {};
+  for (const d of (data.devices || [])) map[d.id] = d;
+  return map;
+}
+
+function pm25Dot(pm25: number | undefined): string {
+  if (pm25 === undefined || pm25 === null) return "⚪";
+  if (pm25 <= 15) return "🟢";
+  if (pm25 <= 35) return "🟡";
+  if (pm25 <= 75) return "🟠";
+  return "🔴";
+}
+
+function clockLine(): string {
+  return new Date().toLocaleTimeString("th-TH", { timeZone: REPORT_TIMEZONE });
+}
+
+async function renderMenu(env: Env, banner = ""): Promise<{ text: string; keyboard: InlineKeyboard }> {
+  const snaps = await fetchSnapshots(env);
+
+  let text = banner + "🎛 <b>ควบคุมเครื่องฟอกอากาศ</b>\nเลือกห้องเพื่อสั่งงาน\n\n";
+  const rows: InlineButton[][] = [];
+
+  for (const id of ROOM_ORDER) {
+    const spec = DEVICE_INFO[id];
+    const snap = snaps[id];
+    const pm25 = snap?.values.pm25 as number | undefined;
+    const power = snap?.values.power as boolean | undefined;
+    const powerIcon = snap === undefined ? "❔" : power ? "⚡" : "⭘";
+
+    text += `${pm25Dot(pm25)} <b>${spec.name}</b> — PM2.5 ${pm25 ?? "—"} µg/m³ ${power ? "(เปิด)" : "(ปิด)"}\n`;
+    rows.push([{
+      text: `${powerIcon} ${spec.name} · ${pm25 ?? "—"}`,
+      callback_data: `d:${id}`,
+    }]);
+  }
+
+  text += `\n🕐 ${clockLine()}`;
+  rows.push([{ text: "🌪 ฟอกทั้งบ้าน (Favorite แรงสุด)", callback_data: "boost" }]);
+  rows.push([{ text: "🔄 รีเฟรช", callback_data: "m" }]);
+
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+/**
+ * เปิดทุกเครื่อง + ตั้ง Favorite + ดันพัดลมแรงสุดในรุ่นที่สั่งระดับพัดลมได้
+ * ยิงทีละเครื่องแบบ sequential — MiCloud ไม่ชอบคำสั่งรัวพร้อมกัน
+ */
+async function boostAllRooms(env: Env): Promise<{ text: string; keyboard: InlineKeyboard }> {
+  const lines: string[] = [];
+
+  for (const id of ROOM_ORDER) {
+    const spec = DEVICE_INFO[id];
+    try {
+      await controlDevice(env, spec.did, spec.host, spec.props.power.siid, spec.props.power.piid, true);
+      await controlDevice(env, spec.did, spec.host, spec.props.mode.siid, spec.props.mode.piid, FAVORITE_MODE);
+      if (spec.props.fan && spec.fanMax) {
+        await controlDevice(env, spec.did, spec.host, spec.props.fan.siid, spec.props.fan.piid, spec.fanMax);
+        lines.push(`✅ ${spec.name} — Favorite + พัดลม ${spec.fanMax}`);
+      } else {
+        lines.push(`✅ ${spec.name} — Favorite`);
+      }
+    } catch (err) {
+      lines.push(`❌ ${spec.name} — ${String(err).substring(0, 60)}`);
+    }
+  }
+
+  return renderMenu(env, `🌪 <b>ฟอกทั้งบ้าน</b>\n${lines.join("\n")}\n\n`);
+}
+
+async function renderDevicePanel(
+  env: Env,
+  id: string,
+  override: Record<string, unknown> = {}
+): Promise<{ text: string; keyboard: InlineKeyboard }> {
+  const spec = DEVICE_INFO[id];
+  const snaps = await fetchSnapshots(env);
+  const snap = snaps[id];
+  const v: Record<string, unknown> = { ...(snap?.values ?? {}), ...override };
+
+  const pm25 = v.pm25 as number | undefined;
+  const power = v.power as boolean | undefined;
+  const mode = v.mode as number | undefined;
+  const fan = v.fan as number | undefined;
+  const buzz = v.buzz as boolean | undefined;
+  const lock = v.lock as boolean | undefined;
+
+  let text = `🎛 <b>${spec.name}</b> ${snap?.online === false ? "❌ ออฟไลน์" : ""}\n`;
+  text += `${pm25Dot(pm25)} PM2.5 <b>${pm25 ?? "—"}</b> µg/m³ ${pm25 !== undefined ? pm25Label(pm25) : ""}\n`;
+  text += `อุณหภูมิ ${v.temp ?? "—"}°C | ความชื้น ${v.hum ?? "—"}% | Filter ${v.filter ?? "—"}%\n`;
+  text += `สถานะ: ${power ? "✅ เปิด" : "❌ ปิด"} | โหมด: ${mode !== undefined ? modeLabel(mode) : "—"}`;
+  if (spec.props.fan && fan !== undefined) text += ` | พัดลม ${fan}`;
+  text += `\n🕐 ${clockLine()}`;
+
+  const rows: InlineButton[][] = [];
+
+  // Power + refresh
+  rows.push([
+    { text: power ? "⭘ ปิดเครื่อง" : "⚡ เปิดเครื่อง", callback_data: `s:${id}:power:${power ? 0 : 1}` },
+    { text: "🔄 รีเฟรช", callback_data: `d:${id}` },
+  ]);
+
+  // Modes — 3 per row, ✅ marks the active one
+  for (let i = 0; i < spec.modes.length; i += 3) {
+    rows.push(spec.modes.slice(i, i + 3).map((m) => ({
+      text: `${mode === m.value ? "✅ " : ""}${m.label}`,
+      callback_data: `s:${id}:mode:${m.value}`,
+    })));
+  }
+
+  // Fan level — 4lite only, when mode = Favorite (2), same rule as the webapp slider
+  if (spec.props.fan && mode === 2) {
+    const current = fan ?? 1;
+    rows.push([
+      { text: "➖", callback_data: `s:${id}:fan:${Math.max(1, current - 1)}` },
+      { text: `🌀 พัดลม ${current}/14`, callback_data: `d:${id}` },
+      { text: "➕", callback_data: `s:${id}:fan:${Math.min(14, current + 1)}` },
+    ]);
+  }
+
+  // Buzz + lock toggles
+  const toggles: InlineButton[] = [];
+  if (spec.props.buzz) {
+    toggles.push({ text: `🔔 เสียง ${buzz ? "เปิด" : "ปิด"}`, callback_data: `s:${id}:buzz:${buzz ? 0 : 1}` });
+  }
+  if (spec.props.lock) {
+    toggles.push({ text: `🔒 ล็อก ${lock ? "เปิด" : "ปิด"}`, callback_data: `s:${id}:lock:${lock ? 0 : 1}` });
+  }
+  if (toggles.length > 0) rows.push(toggles);
+
+  rows.push([{ text: "⬅️ กลับเมนู", callback_data: "m" }]);
+
+  return { text, keyboard: { inline_keyboard: rows } };
+}
+
+/** Handle an inline-keyboard tap. Returns the toast text for answerCallbackQuery. */
+async function handleMenuCallback(env: Env, chatId: number, messageId: number, data: string): Promise<string> {
+  let toast = "";
+  let view: { text: string; keyboard: InlineKeyboard };
+
+  if (data === "m") {
+    view = await renderMenu(env);
+  } else if (data === "boost") {
+    view = await boostAllRooms(env);
+  } else if (data.startsWith("d:")) {
+    const id = data.slice(2);
+    if (!DEVICE_INFO[id]) return "ไม่พบอุปกรณ์";
+    view = await renderDevicePanel(env, id);
+  } else if (data.startsWith("s:")) {
+    const [, id, prop, rawValue] = data.split(":");
+    const spec = DEVICE_INFO[id];
+    const propSpec = spec?.props[prop];
+    if (!propSpec) return "คำสั่งนี้ไม่รองรับกับเครื่องนี้";
+
+    const isBool = prop === "power" || prop === "buzz" || prop === "lock";
+    const value: boolean | number = isBool ? rawValue === "1" : Number(rawValue);
+
+    try {
+      await controlDevice(env, spec.did, spec.host, propSpec.siid, propSpec.piid, value);
+      const overlay: Record<string, unknown> = { [prop]: value };
+
+      // เลือก Favorite = ต้องการฟอกแรงสุด → ดันพัดลมขึ้นสุดให้เลยในรุ่นที่สั่งได้
+      const boostFan = prop === "mode" && value === FAVORITE_MODE && spec.props.fan && spec.fanMax;
+      if (boostFan) {
+        await controlDevice(env, spec.did, spec.host, spec.props.fan.siid, spec.props.fan.piid, spec.fanMax!);
+        overlay.fan = spec.fanMax;
+      }
+
+      toast = prop === "power"
+        ? (value ? "✅ เปิดเครื่องแล้ว" : "✅ ปิดเครื่องแล้ว")
+        : prop === "mode"
+          ? (boostFan ? `✅ Favorite + พัดลม ${spec.fanMax}` : `✅ โหมด ${modeLabel(Number(rawValue))}`)
+          : prop === "fan"
+            ? `✅ พัดลมระดับ ${rawValue}`
+            : `✅ ${prop} = ${isBool ? (value ? "เปิด" : "ปิด") : rawValue}`;
+      // Optimistic overlay — Xiaomi cloud มักยังคืนค่าเก่าทันทีหลัง set
+      view = await renderDevicePanel(env, id, overlay);
+    } catch (err) {
+      return `❌ สั่งงานไม่สำเร็จ: ${String(err).substring(0, 150)}`;
+    }
+  } else {
+    return "";
+  }
+
+  await editMessageText(env.TELEGRAM_BOT_TOKEN, chatId, messageId, view.text, view.keyboard);
+  return toast;
+}
+
 async function handleAI(env: Env, chatId: number, userMessage: string): Promise<string> {
   const devicesData = await fetchDevices(env);
   const context = JSON.stringify(devicesData, null, 2);
@@ -537,15 +861,63 @@ async function handleRenew(env: Env, chatId: number): Promise<string> {
   return `❌ workflow_dispatch ล้มเหลว (HTTP ${res.status})`;
 }
 
+// ── Telegram command menu (setMyCommands) ─────────────────────────────────────
+// ปุ่ม Menu สีน้ำเงินในแช็ต — ลงทะเบียนผ่าน GET /set-commands
+// /on กับ /off ต้องมีชื่อห้องต่อท้าย — ถ้ากดจากเมนูเปล่า ๆ จะเปิดเมนูปุ่มกดให้แทน
+const BOT_COMMANDS: { command: string; description: string }[] = [
+  { command: "menu", description: "🎛 เมนูควบคุมเครื่องฟอก (เปิด/ปิด, โหมด, พัดลม)" },
+  { command: "status", description: "📊 สถานะทุกห้อง — PM2.5, อุณหภูมิ, filter" },
+  { command: "predict", description: "🔮 ทำนาย PM2.5 + วันเปลี่ยน filter" },
+  { command: "vacuum", description: "🤖 สถานะหุ่นยนต์ดูดฝุ่น S40 Pro" },
+  { command: "on", description: "⚡ เปิดเครื่อง — /on 4lite (กดเปล่าเปิดเมนู)" },
+  { command: "off", description: "⭘ ปิดเครื่อง — /off 4lite (กดเปล่าเปิดเมนู)" },
+  { command: "weather", description: "📡 สภาพอากาศตามตำแหน่งล่าสุด" },
+  { command: "weather_home", description: "🌤 สภาพอากาศที่บ้าน" },
+  { command: "token", description: "🔑 สถานะโทเคน Xiaomi" },
+  { command: "renew", description: "♻️ หมุนโทเคน Xiaomi (cooldown 10 นาที)" },
+  { command: "ai", description: "🧠 ถาม AI — /ai อากาศวันนี้เป็นไง" },
+  { command: "help", description: "❓ คำสั่งทั้งหมด" },
+];
+
 // ── Webhook handler ───────────────────────────────────────────────────────────
 
 async function handleWebhook(request: Request, env: Env): Promise<Response> {
-  let update: { message?: { chat: { id: number }; text?: string; location?: TelegramLocation; from?: { username?: string } } };
+  let update: {
+    message?: { chat: { id: number }; text?: string; location?: TelegramLocation; from?: { username?: string } };
+    callback_query?: { id: string; data?: string; message?: { chat: { id: number }; message_id: number } };
+  };
   try {
     update = await request.json();
   } catch {
     return new Response("OK");
   }
+
+  // Inline-keyboard taps from the control menu
+  const cb = update.callback_query;
+  if (cb) {
+    const cbChatId = cb.message?.chat.id;
+    if (cbChatId === undefined || String(cbChatId) !== env.ALLOWED_CHAT_ID) {
+      await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, cb.id);
+      return new Response("OK");
+    }
+    const cbData = cb.data || "";
+    // ฟอกทั้งบ้านยิงหลายคำสั่งเรียงกัน — ตอบ callback ก่อนกัน "query is too old"
+    const answeredEarly = cbData === "boost";
+    if (answeredEarly) {
+      await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, cb.id, "⏳ กำลังเปิดทั้งบ้าน…");
+    }
+    let toast = "";
+    try {
+      toast = await handleMenuCallback(env, cbChatId, cb.message!.message_id, cbData);
+    } catch (err) {
+      toast = `⚠️ ${String(err).substring(0, 150)}`;
+    }
+    if (!answeredEarly) {
+      await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, cb.id, toast || undefined);
+    }
+    return new Response("OK");
+  }
+
   const message = update.message;
   if (!message) return new Response("OK");
 
@@ -571,6 +943,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     response = `🤖 <b>Air Quality Bot</b>
 
 <b>คำสั่ง:</b>
+/menu — เมนูควบคุมเครื่องฟอก (ปุ่มกด: power / โหมด / พัดลม / เสียง / ล็อก)
 /status — ดูสถานะทุกห้อง
 /predict — ทำนาย PM2.5 + Filter
 /on [room] — เปิดเครื่อง (4lite, maxpro, maxdown, cat)
@@ -591,6 +964,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
 <b>ตำแหน่ง:</b>
 ส่ง location มาในแช็ต แล้วใช้ /weather ได้`;
+  } else if (text === "/menu" || text === "/control" || text === "/on" || text === "/off") {
+    const view = await renderMenu(env);
+    await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, view.text, "HTML", view.keyboard);
+    return new Response("OK");
   } else if (text === "/status") {
     response = await handleStatus(env, chatId);
   } else if (text === "/predict") {
@@ -651,11 +1028,22 @@ export default {
       return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
     }
 
+    // GET /set-commands — Register the blue "Menu" command list in Telegram
+    if (request.method === "GET" && url.pathname === "/set-commands") {
+      const res = await telegramRequest(env.TELEGRAM_BOT_TOKEN, "setMyCommands", {
+        commands: BOT_COMMANDS,
+        scope: { type: "chat", chat_id: Number(env.ALLOWED_CHAT_ID) },
+        language_code: "",
+      });
+      const data = await res.json();
+      return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+    }
+
     // GET / — Bot info
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(JSON.stringify({
         bot: "Air Quality Bot",
-        commands: ["/status", "/predict", "/on", "/off", "/vacuum", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
+        commands: ["/menu", "/status", "/predict", "/on", "/off", "/vacuum", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
       }), { headers: { "Content-Type": "application/json" } });
     }
 

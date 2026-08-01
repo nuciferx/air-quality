@@ -31,7 +31,7 @@ Pass: array length = 4, every device has `pm25 ≥ 0`, no `error` field on any d
 ```bash
 curl -s -m 5 https://air-quality-bot.ideaplanstudio.workers.dev/
 ```
-Pass: `commands` array contains canonical list (`/status`, `/predict`, `/on`, `/off`, `/weather`, `/weather_home`, `/token`, `/renew`, `/ai`, `/help`). Fail: command list trimmed/missing.
+Pass: `commands` array contains canonical list (`/menu`, `/status`, `/predict`, `/on`, `/off`, `/weather`, `/weather_home`, `/token`, `/renew`, `/ai`, `/help`). Fail: command list trimmed/missing.
 
 ### 4. Token age (timeout 5s, requires LOG_SECRET)
 ```bash
