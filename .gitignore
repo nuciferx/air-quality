@@ -38,3 +38,15 @@ Thumbs.db
 # ── Windows file-explorer duplicates (e.g. ".vercel (1)", ".gitignore (1)")
 *\ \(1\)
 *\ \(1\)/
+
+# vacuum LAN-probe venv (spike, large)
+spikes/.miio-venv/
+# vacuum map spike — runtime artifacts (may contain tokens/cookies)
+spikes/sniff_mihome/captured.log
+spikes/map_fresh.json
+spikes/map_decoded.bin
+spikes/sniff_mihome/captured_round1.log
+spikes/sniff_mihome/*.log
+spikes/_plugin_fetch.py
+spikes/miio_lan_decoded.log
+spikes/miio_lan.pcap

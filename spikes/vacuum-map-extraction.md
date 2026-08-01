@@ -63,14 +63,105 @@ field-brute ทุก comma/slash field กับ map จริง (oracle = zli
 รวมถึง `getsetting`(all keys+"all"), `get_user_device_data`, `device_list_page`, `full_device_list`,
 `device_info`(404) → ทั้งหมดไม่มี wifi_sn. สรุป: **cloud ตันสนิท** สำหรับ ov71gl
 
-### ทางปลดล็อกที่เหลือ (ต้องนอกเหนือ cloud API)
-1. **อ่าน wifi_sn จาก device บน LAN** — miIO local protocol ที่ IP 192.168.1.191 ด้วย token
-   `516966...4b52` (ต้องอยู่วงเดียวกับหุ่น / รัน python-miio `miiocli`)
-2. **Sniff Mi Home app** — ดู request ที่ app ส่ง map decode (มี wifi_sn/key)
-3. หา 3irobotix-specific cloud method ที่คืน wifi_sn (ต้อง reverse app protocol)
+### LAN miIO ทดสอบแล้ว — ตันเหมือน cloud (2026-06-27)
+ยิง miIO **ตรงไปที่หุ่น** `192.168.1.191` ด้วย local token `516966...4b52` (ดึงสดผ่าน
+RC4 device_list — ดู `probe_vacuum_token.py`) ผ่าน python-miio 0.5.12 บนวง LAN เดียวกัน:
+- `miIO.info` ตอบ ✅ แต่มีแค่ mac/uid/token/`ap`(ssid/bssid/rssi)/`netif` — **ไม่มี wifi_sn**
+- `get_properties` common-params 2/24, 10/8, 15/6, 20/1 → `code:0 value:""` (**ว่างที่ firmware เอง** ไม่ใช่ cloud ซ่อน)
+- legacy `get_prop[wifi_sn]`, `get_serial_number`, custom methods ทั้งหมด → `-9999 user ack timeout` (method ไม่มีบน fw 4.5.8_0053)
+→ สรุป: option 1 (LAN) **exhausted**. common-params ที่ HA ijai ใช้ดึง wifi_sn (field[11]) ว่างเปล่าจริง
+สคริปต์: `spikes/probe_vacuum_token.py` (RC4 device_list → token) + `spikes/probe_lan_miio.py` (LAN probe)
 
-→ เมื่อได้ wifi_sn: `python spikes/decode_ijai_map.py map.json out.png <did> <model> <mac> <owner_id> <wifi_sn>`
+### Fresh-map forensics + reference-decoder audit (2026-06-27) — ยืนยัน firsthand
+ดึง map สดครบ pipeline (`spikes/fetch_and_analyze_map.py`): LAN S10.P1 → `obj_name 1812498495/1191295215/0`
+→ `get_interim_file_url_pro` (code 0 ok) → download. ผลวิเคราะห์ ciphertext:
+- `version:2`, **7152 bytes, len%16==0** (block cipher), **entropy 7.974**, **ไม่ขึ้นต้น zlib 0x78** → เข้ารหัสจริง
+- brute AES-wifi_sn ทุก candidate (empty, serial `67955/B2AE7F6NP05382` + ชิ้นส่วน, token-ascii, mac, ssid) → **fail หมด**
+
+ตรวจ reference decoder ตัวล่าสุด **`Tarh-76/Python-package-vacuum-map-parser-ijai`** (อัปเดต ก.พ. 2026):
+- `aes_decryptor.py` ใช้ scheme เดียวกันเป๊ะ: `gen_md5_key(wifi_sn, owner_id, device_id, model, mac)` → AES-128-ECB → `bytes.fromhex`
+- `map_data_parser.py` รับ `wifi_sn` เป็น **kwarg** — ไม่มี logic หา wifi_sn ใหม่ (HA layer อ่านจาก device siid7/45 ซึ่ง ov71gl ว่าง)
+- ⚠️ **subtlety**: `md5key()` pad model tail แค่ len 2→"00xx" / 3→"0xxx" (ให้ inner key = mac12+tail4 = 16B).
+  tail ของ ov71gl = `ov71gl` (6 ตัว) → inner key 18B = **AES invalid**. `decode_ijai_map.py` ของเราเดา `[-4:]="71gl"`
+  ซึ่งอาจผิด → ตอนนี้มี **2 unknown** (model-tail variant × wifi_sn) brute มืดพร้อมกันไม่ไหว
+
+→ สรุปแน่นอน: **cloud + LAN exhausted**. ทั้ง key (wifi_sn) และ inner-key tail สำหรับ ov71gl ไม่เปิดเผยนอกแอป
+
+### App-sniff ทำแล้ว (2026-06-27, iOS Mi Home 11.5.204) — **ไม่ pin!** แต่ทางตัน
+mitmproxy (`spikes/sniff_mihome/`) จับ traffic iOS Mi Home ได้ครบ (TLS ไม่ pin บน iOS build นี้):
+- **app ดาวน์โหลด map ciphertext ตัวเดียวกับเรา** จาก FDS `awsusor1.fds.api.xiaomi.com/3irobotic-ov71gl/<owner>/<did>/0`
+  (presigned) แล้ว **decrypt เองในเครื่อง** → key ไม่วิ่งบนสาย
+- app ลองโหลด `3irobotic-ov71gl/0Cloud_Management/para_config/para.config` → **404** (ไม่มี)
+- app อ่าน `miotspec/prop/get` เหมือนเรา = common-params ว่าง → **app ก็ไม่ได้ wifi_sn จาก cloud**
+- io.mi.com bodies เข้ารหัส RC4 ด้วย **ssecurity ของ session มือถือ** (คนละตัวกับ creds.json เรา) ถอดด้วย ssecurity เราออกมา garbage
+- **replay** endpoint ที่ app ใช้ด้วย session เรา (ถอดได้): `device/deviceinfo`, `plugin/get_config_info_new`,
+  `device/get_extra_data`, `home/local_device_list` → **ไม่มี wifi_sn / map key** สักตัว
+
+### brute key ทั้งหมด fail (2026-06-27)
+ทดกับ map จริง (oracle = zlib): wifi_sn="" × model-tail variants ({71gl,ov71,v71g,…}), token เป็น
+inner_key/direct-key (token 16-byte ascii = "Qif2QUEzXIClbZKR"), md5(token/serial/did/mac) → **fail หมด**
+สคริปต์: `fetch_and_analyze_map.py`, `replay_and_brute.py`, `brute_token_keys.py`
+
+### ข้อสรุปใหม่ (แทนสมมุติฐาน wifi_sn เดิม)
+reference decoder ijai สร้าง inner key = mac(12)+tail สำหรับ ov71gl ได้ **18 byte = AES invalid** →
+**reference decode ov71gl ไม่ได้เลย**. รวมกับ key ที่ derive จากทุกแหล่งเรามี fail หมด → สรุปได้ว่า
+**ov71gl `version:2` ใช้ scheme ใหม่ที่ไม่ใช่ wifi_sn-AES-ECB** และ wifi_sn ถูก cache ในแอปตั้งแต่ pairing
+(ไม่วิ่งบนสายอีก) แหล่งความจริงเดียว = **โค้ด decrypt ในปลั๊กอิน/แอป หรือ app local storage**
+
+### Windows + plugin-fetch audit (2026-06-27) — ปิด path "reverse plugin bundle" แบบ cheap
+ย้ายงานมาเครื่อง **Windows 11** (วง LAN เดียวกับหุ่น — `ping 192.168.1.191` = 2ms local ✅; มือถือ .188 iOS
+ไม่ตอบ ping ปกติ) เพื่อปลดกำแพง promiscuous-mode ของ Mac. firsthand วันนี้:
+- เรียก `plugin/fetch_plugin` เอง (signing เรา, ทุก payload shape: latest_req models/plugin_type 1·3,
+  +api_version/version_code) ที่ host **us** → `code:0` แต่ `latest_info: []` **ว่างทุกตัว**
+- `plugin/get_support_models {models:[ov71gl]}` → **`plugin_id: 0`** = **ov71gl ไม่มีปลั๊กอินแยกให้ดาวน์โหลด**
+  → map decrypt อยู่ใน **native renderer ฝังในแอป** (`tinyrender_ios_native`, เห็นใน app_config CDN) ไม่ใช่ bundle
+- ใน app-sniff: body ของ `fetch_plugin`/io.mi.com ถูก RC4 ด้วย **ssecurity ของ session มือถือ** → ถอดด้วย
+  creds.json เรา = garbage (ยืนยันว่า capture เดิมไม่เคยได้ URL ปลั๊กอินจริง)
+→ สรุป: **"download ปลั๊กอินรุ่นนี้แล้ว grep หา key" ไม่มีจริง** — decrypt logic อยู่ในโค้ด native ที่ share
+ทั้งแอป (ต้อง reverse ตัว Mi Home IPA / tinyrender lib เอง ไม่ใช่ bundle เล็กๆ)
+
+### ทางที่เหลือ (re-ranked 2026-06-27 หลังปิด cheap-plugin path)
+1. **ดึง wifi_sn จาก app local storage** (iOS Mi Home container — jailbreak หรือ encrypted-backup extract) —
+   **deterministic ถ้าได้ container** (wifi_sn ถูก cache ตั้งแต่ pairing) ต้องเข้าถึงเครื่อง/iTunes backup
+2. **จับ pairing traffic** (reset+pair หุ่นใหม่ผ่าน proxy) — ช่วง provision เป็น**จังหวะเดียวที่ key/wifi_sn
+   อาจวิ่งบนสาย** · เสี่ยง: ล้าง map/ห้อง/config หุ่นทิ้ง · ต้องมือถือ+proxy พร้อม
+3. **Reverse Mi Home native renderer** (tinyrender) จาก decrypted IPA — payoff สูงสุด (ปลด scheme ทั้งหมด)
+   แต่ R.E. หนัก ต้องมี IPA ที่ decrypt แล้ว + เครื่องมือ disasm
+4. **LAN MITM (ตอนนี้ทำได้บน Windows แล้ว)** — แต่ app-sniff พิสูจน์แล้วว่า key **decrypt local ไม่วิ่งบนสาย**
+   ตอนใช้งานปกติ → payoff ต่ำ (ได้แค่ยืนยันชื่อ method) เว้นแต่ใช้คู่กับ path 2 (จับตอน pairing)
+→ ได้ key/wifi_sn แล้ว: `decode_ijai_map.py map_fresh.json out.png <did> <model> <mac> <owner_id> <wifi_sn>`
+
+> หมายเหตุ: pipeline **ดาวน์โหลด map สด ใช้งานได้สมบูรณ์** (`fetch_and_analyze_map.py`) — เหลือแค่ปลดรหัส
+
+### LAN miIO sniff: ยืนยันแอปใช้ LAN จริง แต่ macOS บล็อก (2026-06-27)
+**ค้นพบสำคัญ:** ดัก UDP 54321 (passive tcpdump) ตอนเปิดแผนที่ → เห็นมือถือ (.188) **broadcast miIO hello
+discovery** (`21310020`+0xff, did=ffffffff) 15 ครั้ง → **แอปคุยกับหุ่นผ่าน LAN miIO จริง** ไม่ใช่ cloud relay ล้วน
+การอ่าน prop จริงเป็น **unicast** (.188↔.191) ซึ่งบน switched Wi-Fi มองไม่เห็นถ้าไม่ MITM
+
+**กำแพง macOS:** จะ MITM (ARP-spoof) ให้เห็น unicast — แต่ **บน Wi-Fi en0 ของ macOS ตั้ง promiscuous mode ไม่ได้**
+(`Errno 102`) ทำให้ **scapy, bettercap พังหมด** (ทั้งคู่ต้อง promisc ตอน init), dsniff/arpspoof ก็ไม่มีใน brew
+→ ทำ LAN MITM บน Mac เครื่องนี้ไม่ได้
+
+**ทำไม LAN ถึงเป็นความหวัง:** miIO LAN เข้ารหัสด้วย **device token ซึ่งเรามี** (`516966…`) — ต่างจาก HTTPS ที่ใช้
+ssecurity ของมือถือ (ถอดไม่ได้) ดังนั้นถ้าจับ unicast miIO ได้ **เราถอดอ่าน method+params+result ได้ 100%**
+จะเห็นเป๊ะว่าแอปเรียก method ไหนดึง wifi_sn/map-key (ตัวที่ cloud/LAN-probe ของเราเรียกแล้ว timeout เพราะเดาชื่อผิด)
+
+**▶ ทำต่อบน Windows/Linux (หรือ Mac + USB-Ethernet/USB-Wi-Fi ที่ promisc ได้):**
+1. ต่อเครื่องวง LAN เดียวกับหุ่น (.191) + มือถือ (.188)
+2. ARP-spoof 2 ฝั่ง: Windows = `Ettercap`/`bettercap` ได้เลย · Linux = `arpspoof -i <if> -t <phone> <robot>` + `-r`
+   (เปิด ip_forward: `sysctl -w net.ipv4.ip_forward=1`)
+3. จับ: `tcpdump -i <if> -w miio_lan.pcap 'udp port 54321 and host 192.168.1.191 and host 192.168.1.188'`
+   (Wireshark ก็ได้) → เปิดแผนที่ในแอป pan/zoom + เริ่มทำความสะอาด
+4. ก๊อป pcap กลับมา → ถอดด้วย **`spikes/decode_miio_pcap.py`** (พร้อมแล้ว):
+   `VACUUM_LOCAL_TOKEN=<32hex token> python spikes/decode_miio_pcap.py miio_lan.pcap`
+   (token: ดึงสดด้วย `python spikes/probe_vacuum_token.py` — field `token`)
+5. อ่าน method ที่แอปใช้ → เรียก method นั้นเองผ่าน python-miio (`probe_lan_miio.py`) → ได้ wifi_sn/key → decode map
+สคริปต์ที่เกี่ยวข้องอยู่ใน `spikes/` หมดแล้ว (token ดึงสดด้วย `probe_vacuum_token.py`)
+
+> ⚠️ setup: เปิด passwordless sudo ไว้ที่ `/etc/sudoers.d/claude-vacuum` (bettercap/tcpdump/sysctl/pkill)
+> ถ้าไม่ใช้ต่อแล้วลบทิ้งได้: `sudo rm /etc/sudoers.d/claude-vacuum`
 
 อ้างอิง:
+- **Tarh-76/Python-package-vacuum-map-parser-ijai** (decoder ล่าสุด, scheme ยืนยัน 2026-06-27)
 - tooljose88/HA-...-Ijai-Support (`ijai/aes_decryptor.py`, `map_data_parser.py`)
 - PiotrMachowski Xiaomi-Cloud-Map-Extractor issue #714 (`get_interim_file_url_pro`, ijai.vacuum.v3)
