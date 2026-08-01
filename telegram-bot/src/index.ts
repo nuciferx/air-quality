@@ -10,6 +10,8 @@
  *   WORKER_API_SECRET   — LOG_SECRET from the main worker
  */
 
+import { renderLineChart, SERIES_EMOJI, type Series } from "./chart";
+
 export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   QWEN_API_KEY: string;
@@ -101,6 +103,40 @@ async function editMessageText(
     parse_mode: "HTML",
     ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
   });
+}
+
+async function sendPhoto(
+  token: string,
+  chatId: number,
+  png: Uint8Array,
+  caption: string,
+  replyMarkup: InlineKeyboard
+): Promise<Response> {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("caption", caption);
+  form.append("parse_mode", "HTML");
+  form.append("reply_markup", JSON.stringify(replyMarkup));
+  form.append("photo", new Blob([png], { type: "image/png" }), "chart.png");
+  return fetch(`https://api.telegram.org/bot${token}/sendPhoto`, { method: "POST", body: form });
+}
+
+/** แก้รูปในข้อความเดิม — ข้อความที่เป็นรูปใช้ editMessageText ไม่ได้ ต้อง editMessageMedia */
+async function editMessagePhoto(
+  token: string,
+  chatId: number,
+  messageId: number,
+  png: Uint8Array,
+  caption: string,
+  replyMarkup: InlineKeyboard
+): Promise<Response> {
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("message_id", String(messageId));
+  form.append("media", JSON.stringify({ type: "photo", media: "attach://chart", caption, parse_mode: "HTML" }));
+  form.append("reply_markup", JSON.stringify(replyMarkup));
+  form.append("chart", new Blob([png], { type: "image/png" }), "chart.png");
+  return fetch(`https://api.telegram.org/bot${token}/editMessageMedia`, { method: "POST", body: form });
 }
 
 async function answerCallbackQuery(token: string, callbackId: string, text?: string): Promise<Response> {
@@ -693,6 +729,16 @@ async function handleMenuCallback(env: Env, chatId: number, messageId: number, d
   let toast = "";
   let view: { text: string; keyboard: InlineKeyboard };
 
+  // กราฟเป็นข้อความรูป — ต้อง editMessageMedia ไม่ใช่ editMessageText
+  if (data.startsWith("c:")) {
+    const [, rawMetric, rawHours] = data.split(":");
+    const metric = (rawMetric in METRICS ? rawMetric : "pm25") as Metric;
+    const hours = Number(rawHours) === 168 ? 168 : 24;
+    const chart = await buildChartView(env, metric, hours);
+    await editMessagePhoto(env.TELEGRAM_BOT_TOKEN, chatId, messageId, chart.png, chart.caption, chart.keyboard);
+    return "";
+  }
+
   if (data === "m") {
     view = await renderMenu(env);
   } else if (data === "boost") {
@@ -869,11 +915,135 @@ async function handleRenew(env: Env, chatId: number): Promise<string> {
   return `❌ workflow_dispatch ล้มเหลว (HTTP ${res.status})`;
 }
 
+// ── Stats charts (/stats) ─────────────────────────────────────────────────────
+
+type Metric = "pm25" | "temp" | "hum";
+
+const METRICS: Record<Metric, {
+  label: string;      // ไทย — ใช้ใน caption/ปุ่ม
+  title: string;      // ASCII — ใช้ในรูป (ฟอนต์ bitmap รองรับแค่ ASCII)
+  unit: string;       // ASCII
+  captionUnit: string;
+  emoji: string;
+  digits: number;
+  threshold?: number;
+}> = {
+  pm25: { label: "ฝุ่น PM2.5", title: "PM2.5", unit: "UG/M3", captionUnit: "µg/m³", emoji: "🌫", digits: 0, threshold: 40 },
+  temp: { label: "อุณหภูมิ",   title: "TEMP",  unit: "C",     captionUnit: "°C",    emoji: "🌡", digits: 1 },
+  hum:  { label: "ความชื้น",   title: "HUM",   unit: "%",     captionUnit: "%",     emoji: "💧", digits: 0 },
+};
+
+interface StatRow {
+  device_id: string;
+  hour: string;
+  pm25: number | null;
+  temp: number | null;
+  hum: number | null;
+}
+
+function chartKeyboard(metric: Metric, hours: number): InlineKeyboard {
+  const metricRow = (Object.keys(METRICS) as Metric[]).map((m) => ({
+    text: `${m === metric ? "✅ " : ""}${METRICS[m].emoji} ${METRICS[m].label.replace("ฝุ่น ", "")}`,
+    callback_data: `c:${m}:${hours}`,
+  }));
+  return {
+    inline_keyboard: [
+      metricRow,
+      [
+        { text: `${hours <= 24 ? "✅ " : ""}24 ชม.`, callback_data: `c:${metric}:24` },
+        { text: `${hours > 24 ? "✅ " : ""}7 วัน`, callback_data: `c:${metric}:168` },
+      ],
+      [{ text: "🔄 รีเฟรช", callback_data: `c:${metric}:${hours}` }],
+    ],
+  };
+}
+
+/** "2026-08-01T05:00:00" (UTC จาก D1) → Date ที่บวกเป็นเวลาไทยแล้ว */
+function bangkokDate(hourKey: string): Date {
+  return new Date(new Date(`${hourKey}Z`).getTime() + 7 * 3600 * 1000);
+}
+
+async function buildChartView(
+  env: Env,
+  metric: Metric,
+  hours: number
+): Promise<{ png: Uint8Array; caption: string; keyboard: InlineKeyboard }> {
+  const data = await fetchHistoryStats(env, hours) as { stats?: StatRow[] };
+  const stats = data.stats ?? [];
+  const buckets = [...new Set(stats.map((s) => s.hour))].sort().slice(-hours);
+  const indexOfHour = new Map(buckets.map((h, i) => [h, i]));
+  const meta = METRICS[metric];
+
+  const series: Series[] = [];
+  const legend: string[] = [];
+
+  ROOM_ORDER.forEach((id, i) => {
+    const points: (number | null)[] = new Array(buckets.length).fill(null);
+    for (const row of stats) {
+      if (row.device_id !== id) continue;
+      const at = indexOfHour.get(row.hour);
+      if (at === undefined) continue;
+      const value = row[metric];
+      points[at] = value === null || value === undefined ? null : value;
+    }
+    series.push({ colorIndex: i, points });
+
+    const nums = points.filter((v): v is number => v !== null);
+    if (nums.length === 0) {
+      legend.push(`${SERIES_EMOJI[i]} ${DEVICE_INFO[id].name} — ไม่มีข้อมูล`);
+      return;
+    }
+    const avg = nums.reduce((a, b) => a + b, 0) / nums.length;
+    const max = Math.max(...nums);
+    const last = nums[nums.length - 1];
+    legend.push(
+      `${SERIES_EMOJI[i]} ${DEVICE_INFO[id].name} — ล่าสุด ${last.toFixed(meta.digits)} · ` +
+      `เฉลี่ย ${avg.toFixed(meta.digits)} · สูงสุด ${max.toFixed(meta.digits)}`
+    );
+  });
+
+  // ป้ายแกน X: 24 ชม. → ทุก 4 ชั่วโมง (HH), 7 วัน → ทุก 24 ชั่วโมง (DD/MM)
+  const step = hours <= 24 ? 4 : 24;
+  const xLabels: { index: number; text: string }[] = [];
+  for (let i = 0; i < buckets.length; i += step) {
+    const d = bangkokDate(buckets[i]);
+    xLabels.push({
+      index: i,
+      text: hours <= 24
+        ? `${String(d.getUTCHours()).padStart(2, "0")}`
+        : `${String(d.getUTCDate()).padStart(2, "0")}/${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
+    });
+  }
+
+  const rangeLabel = hours <= 24 ? "24 ชั่วโมง" : "7 วัน";
+  const png = renderLineChart({
+    title: `${meta.title} - ${hours <= 24 ? "24H" : "7D"}`,
+    unit: meta.unit,
+    series,
+    xLabels,
+    threshold: meta.threshold,
+    zeroBase: metric === "pm25",
+  });
+
+  // threshold ถูกวาดเฉพาะตอนที่ยังอยู่ในช่วงแกน — อย่าพูดถึงถ้าอากาศดีจนเส้นหลุดกรอบ
+  const allValues = series.flatMap((s) => s.points).filter((v): v is number => v !== null);
+  const peak = allValues.length > 0 ? Math.max(...allValues) : 0;
+  const thresholdShown = meta.threshold !== undefined && peak * 1.15 >= meta.threshold;
+
+  let caption = `${meta.emoji} <b>${meta.label} — ${rangeLabel}</b> (${meta.captionUnit})\n\n`;
+  caption += legend.join("\n");
+  if (thresholdShown) caption += `\n\n<i>เส้นประแดง = ${meta.threshold} µg/m³ (เกณฑ์เปิดอัตโนมัติ)</i>`;
+  caption += `\n🕐 ${clockLine()} · ข้อมูลเฉลี่ยราย 1 ชม. จาก D1 (${buckets.length} จุด)`;
+
+  return { png, caption, keyboard: chartKeyboard(metric, hours) };
+}
+
 // ── Telegram command menu (setMyCommands) ─────────────────────────────────────
 // ปุ่ม Menu สีน้ำเงินในแช็ต — ลงทะเบียนผ่าน GET /set-commands
 // /on กับ /off ต้องมีชื่อห้องต่อท้าย — ถ้ากดจากเมนูเปล่า ๆ จะเปิดเมนูปุ่มกดให้แทน
 const BOT_COMMANDS: { command: string; description: string }[] = [
   { command: "menu", description: "🎛 เมนูควบคุมเครื่องฟอก (เปิด/ปิด, โหมด, พัดลม)" },
+  { command: "stats", description: "📈 กราฟฝุ่น/อุณหภูมิ/ความชื้น 24 ชม. หรือ 7 วัน" },
   { command: "status", description: "📊 สถานะทุกห้อง — PM2.5, อุณหภูมิ, filter" },
   { command: "predict", description: "🔮 ทำนาย PM2.5 + วันเปลี่ยน filter" },
   { command: "vacuum", description: "🤖 สถานะหุ่นยนต์ดูดฝุ่น S40 Pro" },
@@ -910,9 +1080,13 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     }
     const cbData = cb.data || "";
     // ฟอกทั้งบ้านยิงหลายคำสั่งเรียงกัน — ตอบ callback ก่อนกัน "query is too old"
-    const answeredEarly = cbData === "boost";
+    const answeredEarly = cbData === "boost" || cbData.startsWith("c:");
     if (answeredEarly) {
-      await answerCallbackQuery(env.TELEGRAM_BOT_TOKEN, cb.id, "⏳ กำลังเปิดทั้งบ้าน…");
+      await answerCallbackQuery(
+        env.TELEGRAM_BOT_TOKEN,
+        cb.id,
+        cbData === "boost" ? "⏳ กำลังเปิดทั้งบ้าน…" : "⏳ กำลังวาดกราฟ…"
+      );
     }
     let toast = "";
     try {
@@ -952,6 +1126,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
 <b>คำสั่ง:</b>
 /menu — เมนูควบคุมเครื่องฟอก (ปุ่มกด: power / โหมด / พัดลม / เสียง / ล็อก)
+/stats — กราฟฝุ่น/อุณหภูมิ/ความชื้น 24 ชม. หรือ 7 วัน (สลับได้ในปุ่ม)
 /status — ดูสถานะทุกห้อง
 /predict — ทำนาย PM2.5 + Filter
 /on [room] — เปิดเครื่อง (4lite, maxpro, maxdown, cat)
@@ -975,6 +1150,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
   } else if (text === "/menu" || text === "/control" || text === "/on" || text === "/off") {
     const view = await renderMenu(env);
     await sendMessage(env.TELEGRAM_BOT_TOKEN, chatId, view.text, "HTML", view.keyboard);
+    return new Response("OK");
+  } else if (text === "/stats" || text === "/chart" || text === "/graph") {
+    const chart = await buildChartView(env, "pm25", 24);
+    await sendPhoto(env.TELEGRAM_BOT_TOKEN, chatId, chart.png, chart.caption, chart.keyboard);
     return new Response("OK");
   } else if (text === "/status") {
     response = await handleStatus(env, chatId);
@@ -1051,7 +1230,7 @@ export default {
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(JSON.stringify({
         bot: "Air Quality Bot",
-        commands: ["/menu", "/status", "/predict", "/on", "/off", "/vacuum", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
+        commands: ["/menu", "/stats", "/status", "/predict", "/on", "/off", "/vacuum", "/weather", "/weather_home", "/token", "/ai", "/renew", "/help"],
       }), { headers: { "Content-Type": "application/json" } });
     }
 

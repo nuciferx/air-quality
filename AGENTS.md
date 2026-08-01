@@ -182,6 +182,7 @@ Authorization: Bearer <LOG_SECRET>
 
 | Command | Function |
 |---------|----------|
+| `/stats` (alias `/chart`, `/graph`) | กราฟเส้น PNG 4 ห้อง — PM2.5 / อุณหภูมิ / ความชื้น × 24 ชม. / 7 วัน วาดเองใน `src/chart.ts` (zero-deps) สลับด้วย callback `c:<metric>:<hours>` ผ่าน `editMessageMedia` |
 | `/menu` (alias `/control`) | เมนู inline keyboard ควบคุมเครื่องฟอก — power / mode / fan (4lite เมื่อ mode=Favorite) / buzz / lock ตรงกับ DeviceCard บนเว็บ |
 | `/on` / `/off` เปล่า ๆ | เปิดเมนูปุ่มกดแทน (ต้องมีชื่อห้องต่อท้ายถึงจะสั่งตรง) |
 | ปุ่ม `🌪 ฟอกทั้งบ้าน` | callback `boost` — เปิดทุกเครื่อง + Favorite + พัดลมแรงสุด (เฉพาะรุ่นที่มี `fanMax`) |
