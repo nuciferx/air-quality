@@ -48,6 +48,30 @@ Cloudflare Worker (air-quality-api)   ← cron ทุก 5 นาที
 - worker: เพิ่ม prop `fan { siid: 9, piid: 11 }` ให้ `4lite` ใน `DEVICES` — เดิม `/api/devices` ไม่เคยคืนค่าพัดลม ทำให้ทั้ง slider บนเว็บและปุ่มในบอทไม่รู้ค่าปัจจุบัน
 - ⚠️ `maxpro` / `maxdown` / `cat` ยังไม่มี prop ระดับพัดลมที่ verify แล้ว — Favorite จึงใช้ระดับที่เครื่องจำไว้ ถ้าต้องการลมแรงสุดแบบชัวร์ให้เลือก `L3` (maxpro/maxdown)
 
+### Sprint 2026-08-01 (3) — อ่านสมาร์ทซีน Mi Home (`GET /api/scenes`)
+ก่อนหน้านี้ระบบไม่รู้เลยว่ามีอะไรตั้งเวลาไว้ในแอป Mi Home — ซีนพวกนั้นสั่งเครื่องได้
+โดยที่ auto-control ไม่รู้ตัว (ชนกันได้)
+
+- endpoint ใหม่ `GET /api/scenes` (ต้อง `LOG_SECRET`) — ถาม `/app/v2/homeroom/gethome`
+  แล้ว `/app/scene/list` ทั้ง 3 host (ซีนผูกกับ region ของบ้าน เหมือน device list)
+- `/app/appgateway/miot/appsceneservice/AppScene/GetSceneList` **คืน 404** กับบัญชีนี้ —
+  ตัวที่ยังใช้ได้คือ `/app/scene/list` (body `{"home_id": <number>}`)
+- `summarizeScene()` ย่อซีนดิบเหลือ: ชื่อ / เปิดใช้อยู่ไหม / cron ที่ทริกเกอร์ /
+  คำสั่งที่ยิง + flag `touchesOurDevices` เมื่อซีนแตะ did ที่ระบบเราคุม
+
+**ผลการสำรวจ (2026-08-01)** — บ้าน 3 หลัง (cn/sg/us) รวม 5 ซีน:
+| host | ซีน | สถานะ | ทริกเกอร์ | สั่งอะไร |
+|---|---|---|---|---|
+| cn | 定时智能插座 | ปิด | — | — |
+| cn | Mi Plug waterfall-Schedule on/off | **เปิดอยู่** | on `0 8 * * *` / off `0 0 * * *` | ปลั๊กน้ำตก (ไม่ใช่เครื่องฟอก) |
+| sg | ตัวจับเวลา-Mi Air Purifier MAX on | ปิด | `30 2 9 3 *` (ครั้งเดียว) | `sb1.set_power=off` → โถงชั้นล่าง |
+| sg | 米家空气净化器消息通知 | ปิด | — | แจ้งเตือนอย่างเดียว |
+| sg | Schedule-Mi Air Purifier MAX to Favorite | ปิด | `30 7 * * *` | `sb1.set_power=on` → โถงชั้นล่าง |
+| us | — | ไม่มีซีน (หุ่นดูดฝุ่นไม่ได้ตั้งเวลาไว้) | | |
+
+สรุป: **ตอนนี้ไม่มีซีนไหนชนกับ auto-control** (2 ตัวที่แตะโถงชั้นล่าง `enable=0` ทั้งคู่)
+ซีนพวกนี้ใช้คำสั่ง miio เก่า (`set_power`) ไม่ใช่ MIoT — สร้างไว้ตั้งแต่ 2018/2022
+
 ### Sprint 2026-08-01 (2) — กราฟสถิติใน Telegram (`/stats`)
 - `telegram-bot/src/chart.ts` — **PNG renderer เขียนเอง zero-deps** (ไม่มี canvas/lib):
   indexed-color PNG (type 3) + deflate stored blocks + CRC32/Adler32 + ฟอนต์ bitmap 5×7

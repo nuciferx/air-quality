@@ -891,6 +891,63 @@ async function maybeSendTokenHealthAlert(env: Env, devices: DeviceRuntime[], now
   await env.CREDS_KV.put("system:last_token_alert_ts", String(nowTs));
 }
 
+// ── Mi Home scenes (อ่านอย่างเดียว — ระบบเราไม่ได้สร้าง/แก้ซีนพวกนี้) ─────────
+
+interface SceneEntry {
+  us_id?: number;
+  name?: string;
+  st_id?: number;
+  create_time?: number;
+  setting?: {
+    enable?: string;
+    enable_timer?: string;
+    on_time?: string;
+    off_time?: string;
+    action_list?: { payload?: { did?: string; command?: string; value?: unknown; delay_time?: number } }[];
+    launch?: { attr?: { key?: string; src?: string; enable?: boolean }[] };
+  };
+}
+
+/** ย่อซีนดิบของ Mi Home ให้เหลือเฉพาะสิ่งที่ต้องรู้: เปิดใช้อยู่ไหม / ทำงานเมื่อไร / สั่งเครื่องไหน */
+function summarizeScene(entry: SceneEntry, homeId: string | number) {
+  const setting = entry.setting ?? {};
+  const timers = (setting.launch?.attr ?? [])
+    .filter((a) => a.src === "timer" && a.key)
+    .map((a) => a.key as string);
+  if (setting.enable_timer === "1") {
+    if (setting.on_time) timers.push(`on: ${setting.on_time}`);
+    if (setting.off_time) timers.push(`off: ${setting.off_time}`);
+  }
+
+  const actions = (setting.action_list ?? []).map((a) => {
+    const payload = a.payload ?? {};
+    const device = payload.did ? DEVICE_MAP.get(
+      DEVICES.find((d) => d.did === payload.did)?.id ?? ""
+    ) : undefined;
+    return {
+      did: payload.did,
+      device: device?.name ?? (payload.did ? "อุปกรณ์อื่น" : undefined),
+      command: payload.command,
+      value: payload.value,
+    };
+  });
+
+  // enable ไม่มี = ซีนแบบเก่าที่ไม่ได้ใช้ field นี้ → ถือว่าเปิดถ้ามี timer ทำงานอยู่
+  const enabled = setting.enable === "1" || (setting.enable === undefined && setting.enable_timer === "1");
+
+  return {
+    home_id: homeId,
+    name: entry.name,
+    enabled,
+    st_id: entry.st_id,
+    created: entry.create_time,
+    timers,
+    actions,
+    /** true = ซีนนี้แตะเครื่องฟอกที่ระบบเราคุมอยู่ → เสี่ยงชนกับ auto-control */
+    touchesOurDevices: actions.some((a) => a.did !== undefined && DEVICES.some((d) => d.did === a.did)),
+  };
+}
+
 // ── Auto-control logic (called from cron) ─────────────────────────────────────
 
 async function checkAndControl(env: Env, devices: DeviceRuntime[], nowTs: number): Promise<void> {
@@ -1355,6 +1412,56 @@ export default {
       } catch (err) {
         return errorResponse(String(err), 502, origin);
       }
+    }
+
+    // GET /api/scenes — ดึงบ้าน + สมาร์ทซีน/ตั้งเวลา ที่ตั้งไว้ในแอป Mi Home
+    // (ระบบเราไม่ได้สร้างซีนพวกนี้ — ดึงมาเพื่อดูว่าชนกับ auto-control หรือเปล่า)
+    if (request.method === "GET" && path === "/api/scenes") {
+      const authHeader = request.headers.get("Authorization");
+      const secret = url.searchParams.get("secret");
+      if (secret !== env.LOG_SECRET && authHeader !== `Bearer ${env.LOG_SECRET}`) {
+        return errorResponse("Unauthorized", 401, origin);
+      }
+
+      // ซีนถูกผูกกับ region ของบ้าน — ต้องถามทั้ง 3 host เหมือน device list
+      // (`/app/appgateway/.../AppScene/GetSceneList` คืน 404 กับบัญชีนี้ — ใช้ตัวเก่าที่ยังทำงาน)
+      const hosts: ("cn" | "sg" | "us")[] = ["cn", "sg", "us"];
+      const out: Record<string, unknown> = {};
+
+      for (const host of hosts) {
+        try {
+          const homeRaw = await withWorkingCreds(env, (creds) =>
+            xiaomiRequest(
+              `${HOST_BASE[host]}/app/v2/homeroom/gethome`,
+              JSON.stringify({ fg: true, fetch_share: true, fetch_share_dev: true, limit: 300, app_ver: 7 }),
+              creds
+            )
+          ) as { result?: { homelist?: { id: string | number; name?: string }[]; share_home_list?: { id: string | number; name?: string }[] } };
+
+          const homes = [...(homeRaw.result?.homelist ?? []), ...(homeRaw.result?.share_home_list ?? [])];
+          const scenes: unknown[] = [];
+
+          for (const home of homes) {
+            const raw = await withWorkingCreds(env, (creds) =>
+              xiaomiRequest(
+                `${HOST_BASE[host]}/app/scene/list`,
+                JSON.stringify({ home_id: Number(home.id) }),
+                creds
+              )
+            ) as { result?: Record<string, SceneEntry> };
+
+            for (const entry of Object.values(raw.result ?? {})) {
+              scenes.push(summarizeScene(entry, home.id));
+            }
+          }
+
+          out[host] = { homes: homes.map((h) => ({ id: h.id, name: h.name })), scenes };
+        } catch (err) {
+          out[host] = { error: String(err).slice(0, 200) };
+        }
+      }
+
+      return jsonResponse({ scenes: out }, 200, origin);
     }
 
     // GET /api/vacuum — fetch all vacuum statuses

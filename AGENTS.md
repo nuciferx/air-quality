@@ -97,6 +97,7 @@
 | POST | `/api/control` | สั่งเปิด/ปิด/เปลี่ยน mode | — |
 | GET | `/api/vacuum` | สถานะหุ่นยนต์ดูดฝุ่นทุกตัว | — |
 | POST | `/api/vacuum/action` | สั่งงานหุ่นยนต์ดูดฝุ่น (did, action) | — |
+| GET | `/api/scenes` | สมาร์ทซีน/ตั้งเวลาที่ตั้งไว้ในแอป Mi Home (อ่านอย่างเดียว) | LOG_SECRET |
 | POST | `/api/renew` | อัปเดต credentials ใน KV | LOG_SECRET |
 | POST | `/api/log` | บันทึก readings จากภายนอก | LOG_SECRET |
 | GET | `/api/creds` | สถานะ credentials | LOG_SECRET |
